@@ -1,0 +1,228 @@
+{
+  "projectType": "data-platform",
+  "projectName": "Apache Flink",
+  "projectDescription": "Apache Flink is an open-source, distributed stream and batch processing framework that provides high-throughput, low-latency data pipelines with stateful computations, event-time processing, and exactly-once guarantees.",
+  "theme": "linden",
+  "primaryColor": "#d9686e",
+  "lightColor": "#be79d9",
+  "darkColor": "#23171b",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Get Started",
+        "groups": [
+          {
+            "group": "Introduction",
+            "pages": [
+              "introduction",
+              "get-started/overview",
+              "get-started/local-installation"
+            ]
+          },
+          {
+            "group": "Quickstarts",
+            "pages": [
+              "get-started/datastream-quickstart",
+              "get-started/table-api-quickstart",
+              "get-started/sql-quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/flink-architecture",
+              "concepts/stateful-stream-processing",
+              "concepts/time",
+              "concepts/glossary"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "APIs",
+        "groups": [
+          {
+            "group": "DataStream API",
+            "pages": [
+              "apis/datastream/overview",
+              "apis/datastream/execution-mode",
+              "apis/datastream/sources",
+              "apis/datastream/sinks",
+              "apis/datastream/operators",
+              "apis/datastream/event-time",
+              "apis/datastream/fault-tolerance",
+              "apis/datastream/state",
+              "apis/datastream/side-output",
+              "apis/datastream/testing"
+            ]
+          },
+          {
+            "group": "Table API & SQL",
+            "pages": [
+              "apis/table/overview",
+              "apis/table/table-environment",
+              "apis/table/table-api",
+              "apis/table/catalogs",
+              "apis/table/functions",
+              "apis/table/data-types",
+              "apis/table/sql-client",
+              "apis/table/sql-gateway"
+            ]
+          },
+          {
+            "group": "Python API (PyFlink)",
+            "pages": [
+              "apis/python/overview",
+              "apis/python/execution-mode",
+              "apis/python/dependency-management",
+              "apis/python/connectors",
+              "apis/python/metrics",
+              "apis/python/debugging",
+              "apis/python/faq"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Deployment",
+        "groups": [
+          {
+            "group": "Setup",
+            "pages": [
+              "deployment/overview",
+              "deployment/configuration",
+              "deployment/cli"
+            ]
+          },
+          {
+            "group": "Resource Providers",
+            "pages": [
+              "deployment/resource-providers/standalone",
+              "deployment/resource-providers/yarn",
+              "deployment/resource-providers/kubernetes"
+            ]
+          },
+          {
+            "group": "High Availability",
+            "pages": [
+              "deployment/ha/overview",
+              "deployment/ha/zookeeper",
+              "deployment/ha/kubernetes"
+            ]
+          },
+          {
+            "group": "Memory & Performance",
+            "pages": [
+              "deployment/memory/overview",
+              "deployment/elastic-scaling",
+              "deployment/adaptive-batch",
+              "deployment/speculative-execution"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "deployment/security/ssl",
+              "deployment/security/kerberos"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Operations",
+        "groups": [
+          {
+            "group": "State Management",
+            "pages": [
+              "ops/state/checkpoints",
+              "ops/state/savepoints",
+              "ops/state/state-backends",
+              "ops/state/task-failure-recovery",
+              "ops/state/large-state-tuning"
+            ]
+          },
+          {
+            "group": "Monitoring",
+            "pages": [
+              "ops/metrics",
+              "ops/rest-api",
+              "ops/monitoring/logging",
+              "ops/production-ready"
+            ]
+          },
+          {
+            "group": "Debugging",
+            "pages": [
+              "ops/debugging/application-profiling",
+              "ops/debugging/flame-graphs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Connectors",
+        "groups": [
+          {
+            "group": "DataStream Connectors",
+            "pages": [
+              "connectors/datastream/overview",
+              "connectors/datastream/filesystem",
+              "connectors/datastream/datagen",
+              "connectors/datastream/hybrid-source"
+            ]
+          },
+          {
+            "group": "Table / SQL Connectors",
+            "pages": [
+              "connectors/table/overview",
+              "connectors/table/kafka",
+              "connectors/table/filesystem",
+              "connectors/table/jdbc"
+            ]
+          },
+          {
+            "group": "Formats",
+            "pages": [
+              "connectors/formats/overview",
+              "connectors/formats/avro",
+              "connectors/formats/json",
+              "connectors/formats/parquet",
+              "connectors/formats/orc"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Unified stream and batch processing on a single runtime",
+    "Event-time processing with out-of-order event support (Dataflow Model)",
+    "Stateful computations with exactly-once fault-tolerance guarantees",
+    "Flexible windowing: tumbling, sliding, session, and custom triggers",
+    "SQL and Table API for declarative data processing",
+    "Python API (PyFlink) for Python-native development",
+    "Native Kubernetes, YARN, and standalone cluster deployment",
+    "Checkpoints and savepoints for operational state management",
+    "Rich connector ecosystem including Kafka, filesystems, and JDBC",
+    "Adaptive batch execution and speculative execution for optimization"
+  ],
+  "publicApiSurface": [
+    "StreamExecutionEnvironment — entry point for DataStream API programs",
+    "DataStream<T> — core abstraction for streaming data transformations",
+    "TableEnvironment — entry point for Table API and SQL programs",
+    "Table — relational abstraction for Table API queries",
+    "StatementSet — batch SQL execution interface",
+    "DataStreamSource<T> — source connector abstraction",
+    "SinkFunction<T> / Sink<T> — sink connector abstraction",
+    "KeyedStream<T, KEY> — partitioned stream for stateful operations",
+    "WindowedStream — stream partitioned by key and window",
+    "ProcessFunction<I, O> — low-level stream processing with timers and state",
+    "RuntimeExecutionMode (STREAMING, BATCH, AUTOMATIC)",
+    "WatermarkStrategy — watermark generation for event-time processing",
+    "CheckpointConfig — checkpoint configuration",
+    "StateBackend — pluggable state storage (HashMapStateBackend, EmbeddedRocksDBStateBackend)",
+    "FlinkKafkaConsumer / FlinkKafkaProducer — Kafka connector",
+    "FileSource / FileSink — file system connector",
+    "StreamTableEnvironment — bridge between DataStream and Table API"
+  ]
+}
