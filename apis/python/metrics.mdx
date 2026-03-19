@@ -13,7 +13,7 @@ Metric collection from Python UDFs is disabled by default. Enable it with:
 t_env.get_config().set("python.metric.enabled", "true")
 ```
 
-Or in `flink-conf.yaml`:
+Or in `conf/config.yaml`:
 
 ```yaml
 python.metric.enabled: true
@@ -259,11 +259,11 @@ table.select(my_udf(col("text")).alias("cleaned")).execute().print()
 Metrics registered from Python UDFs appear in the same places as Java metrics:
 
 - **Flink Web UI** — click a task and open the "Metrics" tab.
-- **Prometheus** — configure the Prometheus reporter in `flink-conf.yaml`.
+- **Prometheus** — configure the Prometheus reporter in `conf/config.yaml`.
 - **JMX** — enabled by default; use `jconsole` or any JMX client.
 
 ```yaml
-# flink-conf.yaml — enable Prometheus reporter
+# conf/config.yaml — enable Prometheus reporter
 metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
 metrics.reporter.prom.port: 9249
 ```

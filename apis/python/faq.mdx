@@ -11,11 +11,11 @@ description: "Frequently asked questions about PyFlink installation, compatibili
     pip install apache-flink
     ```
 
-    PyFlink requires **Java 11 or 17** and **Python 3.8–3.12**. Verify your versions before installing:
+    PyFlink requires **Java 11 or 17** and **Python 3.9–3.12**. Verify your versions before installing:
 
     ```bash
     java -version   # must be 11.x or 17.x
-    python --version  # must be 3.8–3.12
+    python --version  # must be 3.9–3.12
     ```
 
     If you need Arrow-based (pandas) UDFs, also install:
@@ -26,9 +26,9 @@ description: "Frequently asked questions about PyFlink installation, compatibili
   </Accordion>
 
   <Accordion title="Which Python versions are supported?">
-    PyFlink supports **Python 3.8, 3.9, 3.10, 3.11, and 3.12**.
+    PyFlink supports **Python 3.9, 3.10, 3.11, and 3.12**. Python 3.8 and earlier are not supported.
 
-    Python 2 is not supported. Python 3.7 and earlier 3.x versions are no longer supported as of recent Flink releases.
+    Python 2 is not supported. Python 3.8 and earlier 3.x versions are not supported.
 
     The Python version used by your UDF workers must match the version used to install PyFlink. If you use a virtual environment or `add_python_archive()`, configure the interpreter path explicitly:
 

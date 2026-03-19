@@ -122,7 +122,7 @@ This glossary defines the core terms used throughout the Apache Flink documentat
     Parallelism can be set at different levels:
     - **Operator level**: `myOperator.setParallelism(4)`
     - **Execution environment level**: `env.setParallelism(4)` (default for all operators)
-    - **Cluster level**: `parallelism.default` in `flink-conf.yaml`
+    - **Cluster level**: `parallelism.default` in `conf/config.yaml`
   </Accordion>
   <Accordion title="Partition">
     A partition is an independent subset of a data stream or data set. Flink divides streams and datasets into partitions by assigning each **record** to one or more partitions. During execution, each **Task** consumes one or more partitions.

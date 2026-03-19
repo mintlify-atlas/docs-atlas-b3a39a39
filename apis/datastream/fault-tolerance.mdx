@@ -95,9 +95,9 @@ config.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, "s3://my-bucket/flink/che
 env.configure(config);
 ```
 
-Or configure it in `flink-conf.yaml` for cluster-wide defaults:
+Or configure it in `conf/config.yaml` for cluster-wide defaults:
 
-```yaml flink-conf.yaml
+```yaml config.yaml
 state.checkpoints.dir: hdfs:///flink/checkpoints
 ```
 
@@ -110,31 +110,30 @@ When a task fails, Flink restarts it according to the configured restart strateg
 Retries up to a maximum number of times, waiting a fixed delay between each attempt.
 
 ```java
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.RestartStrategyOptions;
 import java.time.Duration;
 
-env.setRestartStrategy(
-    RestartStrategies.fixedDelayRestart(
-        3,                       // maximum number of restart attempts
-        Duration.ofSeconds(10)   // delay between restarts
-    )
-);
+Configuration config = new Configuration();
+config.set(RestartStrategyOptions.RESTART_STRATEGY, "fixed-delay");
+config.set(RestartStrategyOptions.RESTART_STRATEGY_FIXED_DELAY_ATTEMPTS, 3);
+config.set(RestartStrategyOptions.RESTART_STRATEGY_FIXED_DELAY_DELAY, Duration.ofSeconds(10));
+StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(config);
 ```
 
 ### Exponential-delay restart
 
-Increases the delay between retries exponentially, up to a maximum. Useful for avoiding thundering-herd effects when an external system is recovering.
+Increases the delay between retries exponentially, up to a maximum. This is the **default** when checkpointing is enabled.
 
 ```java
-env.setRestartStrategy(
-    RestartStrategies.exponentialDelayRestart(
-        Duration.ofSeconds(1),   // initial delay
-        Duration.ofMinutes(5),   // maximum delay
-        2.0,                     // multiplier
-        Duration.ofMinutes(10),  // reset threshold (resets delay after job runs for this long)
-        0.1                      // jitter factor
-    )
-);
+Configuration config = new Configuration();
+config.set(RestartStrategyOptions.RESTART_STRATEGY, "exponential-delay");
+config.set(RestartStrategyOptions.RESTART_STRATEGY_EXPONENTIAL_DELAY_INITIAL_BACKOFF, Duration.ofSeconds(1));
+config.set(RestartStrategyOptions.RESTART_STRATEGY_EXPONENTIAL_DELAY_MAX_BACKOFF, Duration.ofMinutes(2));
+config.set(RestartStrategyOptions.RESTART_STRATEGY_EXPONENTIAL_DELAY_BACKOFF_MULTIPLIER, 1.4);
+config.set(RestartStrategyOptions.RESTART_STRATEGY_EXPONENTIAL_DELAY_RESET_BACKOFF_THRESHOLD, Duration.ofMinutes(10));
+config.set(RestartStrategyOptions.RESTART_STRATEGY_EXPONENTIAL_DELAY_JITTER_FACTOR, 0.1);
+StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(config);
 ```
 
 ### Failure-rate restart
@@ -142,31 +141,47 @@ env.setRestartStrategy(
 Allows up to N failures within a time interval. If the failure rate is exceeded, the job fails.
 
 ```java
-env.setRestartStrategy(
-    RestartStrategies.failureRateRestart(
-        3,                          // max failures per interval
-        Duration.ofMinutes(5),      // failure rate measurement interval
-        Duration.ofSeconds(10)      // delay between restarts
-    )
-);
+Configuration config = new Configuration();
+config.set(RestartStrategyOptions.RESTART_STRATEGY, "failure-rate");
+config.set(RestartStrategyOptions.RESTART_STRATEGY_FAILURE_RATE_MAX_FAILURES_PER_INTERVAL, 3);
+config.set(RestartStrategyOptions.RESTART_STRATEGY_FAILURE_RATE_FAILURE_RATE_INTERVAL, Duration.ofMinutes(5));
+config.set(RestartStrategyOptions.RESTART_STRATEGY_FAILURE_RATE_DELAY, Duration.ofSeconds(10));
+StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(config);
 ```
 
 ### No restart
 
-The job fails immediately on the first task failure. Useful for batch jobs where you prefer fast failure over retries.
+The job fails immediately on the first task failure. Use for batch jobs where you prefer fast failure over retries.
 
 ```java
-env.setRestartStrategy(RestartStrategies.noRestart());
+Configuration config = new Configuration();
+config.set(RestartStrategyOptions.RESTART_STRATEGY, "none");
+StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(config);
 ```
 
 ### Default restart strategy
 
-If no strategy is set in application code, Flink uses the cluster-level default from `flink-conf.yaml`:
+If no strategy is set in application code, Flink uses the cluster-level default from `conf/config.yaml`. When checkpointing is enabled and no restart strategy is configured, Flink defaults to **exponential-delay** restart:
 
-```yaml flink-conf.yaml
-restart-strategy.type: fixed-delay
-restart-strategy.fixed-delay.attempts: 3
-restart-strategy.fixed-delay.delay: 10s
+```yaml config.yaml
+restart-strategy:
+  type: exponential-delay
+  exponential-delay:
+    initial-backoff: 1 s
+    max-backoff: 2 min
+    backoff-multiplier: 1.4
+    reset-backoff-threshold: 10 min
+    jitter-factor: 0.1
+```
+
+If checkpointing is **not** enabled, the default is `no restart` (the job fails immediately on the first task failure). You can override the default cluster-wide:
+
+```yaml config.yaml
+restart-strategy:
+  type: fixed-delay
+  fixed-delay:
+    attempts: 3
+    delay: 10 s
 ```
 
 ## Savepoints
@@ -180,17 +195,17 @@ A **savepoint** is a manually triggered checkpoint. Unlike regular checkpoints, 
 Trigger a savepoint via the CLI:
 
 ```bash
-# Trigger savepoint and cancel the job
-bin/flink cancel --withSavepoint hdfs:///flink/savepoints <job-id>
+# Trigger savepoint without stopping the job
+./bin/flink savepoint <job-id> hdfs:///flink/savepoints
 
-# Trigger savepoint without cancelling
-bin/flink savepoint <job-id> hdfs:///flink/savepoints
+# Stop a streaming job gracefully, creating a savepoint on the way
+./bin/flink stop --savepointPath hdfs:///flink/savepoints <job-id>
 ```
 
 Resume from a savepoint:
 
 ```bash
-bin/flink run -s hdfs:///flink/savepoints/savepoint-<id> my-job.jar
+./bin/flink run --fromSavepoint hdfs:///flink/savepoints/savepoint-<id> my-job.jar
 ```
 
 ## Unaligned checkpoints

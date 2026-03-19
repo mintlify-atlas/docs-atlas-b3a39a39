@@ -23,7 +23,7 @@ You can mix both APIs in a single program by converting between `Table` and `Dat
 ## Prerequisites
 
 - **Java 11 or 17** (required to run the Flink JVM runtime)
-- **Python 3.8, 3.9, 3.10, 3.11, or 3.12**
+- **Python 3.9, 3.10, 3.11, or 3.12** (Python 3.8 and earlier are not supported)
 - `pip` 20.3 or later
 
 <Warning>
@@ -66,33 +66,28 @@ The examples below show a word count job written with both APIs so you can compa
   <Tab title="Table API">
     ```python
     from pyflink.table import EnvironmentSettings, TableEnvironment, DataTypes
-    from pyflink.table.expressions import col, lit
+    from pyflink.table.expressions import col
     from pyflink.table.udf import udf
 
-    # Create a streaming TableEnvironment
-    t_env = TableEnvironment.create(EnvironmentSettings.in_streaming_mode())
-
-    # Source: generate random word IDs at 5 rows/second
-    words = ["flink", "python", "streaming", "state", "checkpoint"]
-
-    t_env.create_temporary_table(
-        "source",
-        t_env.from_elements([(w,) for w in words * 10], schema=["word"])
-        .__class__  # placeholder — use TableDescriptor in production
-    )
+    # Create a batch TableEnvironment
+    t_env = TableEnvironment.create(EnvironmentSettings.in_batch_mode())
 
     # Inline UDF to upper-case a word
     @udf(result_type=DataTypes.STRING())
     def upper(s):
         return s.upper()
 
+    # Create an in-memory table from a list of tuples
+    words = ["flink", "python", "streaming", "state", "checkpoint",
+             "flink", "python", "flink"]
+    table = t_env.from_elements([(w,) for w in words], schema=["word"])
+
     # Count occurrences per word
-    table = t_env.from_elements([(w,) for w in words * 10], schema=["word"])
     result = (
         table
         .select(upper(col("word")).alias("word"))
         .group_by(col("word"))
-        .select(col("word"), lit(1).count.alias("cnt"))
+        .select(col("word"), col("word").count.alias("cnt"))
     )
     result.execute().print()
     ```
