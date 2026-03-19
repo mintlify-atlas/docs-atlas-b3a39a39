@@ -1,0 +1,200 @@
+---
+title: "Kerberos Authentication"
+description: "Configure Flink to authenticate with Kerberos for secure access to HDFS, HBase, ZooKeeper, Kafka, and other Hadoop-based services."
+---
+
+Flink provides first-class support for Kerberos authentication, enabling jobs to securely access services like HDFS, HBase, ZooKeeper, and Kafka in production environments where these services require Kerberos credentials.
+
+## Supported services
+
+| Service | Kerberos support |
+|---|---|
+| HDFS | Yes |
+| HBase | Yes |
+| ZooKeeper | Yes (SASL) |
+| Kafka | Yes (0.9+) |
+
+## Credential types
+
+Flink supports three ways to provide Kerberos credentials:
+
+| Credential type | Recommended for | Notes |
+|---|---|---|
+| **Keytab file** | Production (preferred) | Never expires; automatically renewed |
+| **Credential cache** (`kinit`) | Development/testing | Has an expiry date; user is responsible for renewal |
+| **Hadoop delegation tokens** | YARN/HDFS integration | User-provided tokens are not automatically renewed |
+
+For long-running streaming jobs (days or weeks), keytab files are strongly recommended because they do not expire.
+
+## How Flink's security modules work
+
+Flink's security architecture uses pluggable **security modules** installed at startup:
+
+**Hadoop Security Module**: Uses Hadoop's `UserGroupInformation` (UGI) to establish a process-wide login user. This login user is used for all interactions with HDFS, HBase, and YARN.
+
+Login precedence when `hadoop.security.authentication=kerberos`:
+1. If `security.kerberos.login.keytab` and `security.kerberos.login.principal` are configured → **keytab login**
+2. If `security.kerberos.login.use-ticket-cache: true` → **credential cache login**
+3. Otherwise → OS user identity
+
+**JAAS Security Module**: Provides a dynamic JAAS configuration, making the configured Kerberos credentials available to ZooKeeper, Kafka, and other JAAS-aware components.
+
+**ZooKeeper Security Module**: Configures the ZooKeeper service name and JAAS login context name used for ZooKeeper SASL authentication.
+
+## Configuration
+
+Add Kerberos configuration to `conf/config.yaml`:
+
+```yaml
+# Path to the keytab file (must be accessible on all cluster nodes)
+security.kerberos.login.keytab: /etc/security/keytabs/flink.keytab
+
+# Kerberos principal for the keytab
+security.kerberos.login.principal: flink@EXAMPLE.COM
+
+# Components that should use Kerberos login context
+# (comma-separated list)
+security.kerberos.login.contexts: Client,KafkaClient
+
+# Whether to use the Kerberos ticket cache (for kinit-based auth)
+security.kerberos.login.use-ticket-cache: false
+
+# Path to the Kerberos configuration file (optional)
+# Flink can distribute this file to pods/containers automatically
+security.kerberos.krb5-conf.path: /etc/krb5.conf
+```
+
+### HDFS filesystem access
+
+To obtain delegation tokens for additional HDFS filesystems beyond the default:
+
+```yaml
+security.kerberos.access.hadoopFileSystems: hdfs://namenode1:8020,hdfs://namenode2:8020
+```
+
+## Deployment-specific setup
+
+<Tabs>
+  <Tab title="Standalone">
+    <Steps>
+      <Step title="Configure credentials">
+        Add Kerberos options to `conf/config.yaml` on **all cluster nodes**.
+      </Step>
+      <Step title="Distribute the keytab">
+        Copy the keytab file to the path specified in `security.kerberos.login.keytab` on every node.
+      </Step>
+      <Step title="Start the cluster">
+        ```bash
+        ./bin/start-cluster.sh
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="YARN">
+    <Steps>
+      <Step title="Configure credentials on the client">
+        Add Kerberos options to `conf/config.yaml` on the machine running the `flink` or `yarn-session.sh` command.
+      </Step>
+      <Step title="Place the keytab on the client">
+        The keytab must be at the path specified in `security.kerberos.login.keytab` on the client node.
+      </Step>
+      <Step title="Submit">
+        ```bash
+        ./bin/flink run -t yarn-application my-job.jar
+        ```
+        Flink automatically copies the keytab from the client to all YARN containers.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Native Kubernetes">
+    <Steps>
+      <Step title="Configure credentials on the client">
+        Add Kerberos options to `conf/config.yaml` on the machine running `kubectl` and `flink`.
+      </Step>
+      <Step title="Place the keytab on the client">
+        The keytab must be accessible at the configured path on the client machine.
+      </Step>
+      <Step title="Submit">
+        ```bash
+        ./bin/flink run \
+            --target kubernetes-application \
+            -Dkubernetes.cluster-id=my-cluster \
+            -Dkubernetes.container.image.ref=my-flink-image \
+            local:///opt/flink/usrlib/my-job.jar
+        ```
+        Flink automatically copies the keytab to JobManager and TaskManager pods.
+      </Step>
+    </Steps>
+
+    If the Kerberos configuration file (`krb5.conf`) is not present in the container image, configure Flink to upload it:
+
+    ```yaml
+    security.kerberos.krb5-conf.path: /etc/krb5.conf
+    ```
+  </Tab>
+</Tabs>
+
+## Using credential cache (kinit)
+
+For short-lived jobs or development environments, you can use a Kerberos credential cache created by `kinit` instead of a keytab:
+
+<Steps>
+  <Step title="Configure ticket cache usage">
+    ```yaml
+    security.kerberos.login.use-ticket-cache: true
+    ```
+  </Step>
+  <Step title="Log in with kinit">
+    ```bash
+    kinit flink@EXAMPLE.COM
+    ```
+  </Step>
+  <Step title="Deploy the cluster">
+    On YARN and Kubernetes, make the credential cache available on all cluster nodes where Kerberos authentication is needed.
+  </Step>
+</Steps>
+
+<Warning>
+  Credential cache entries have an expiry time. For long-running jobs, the cache expires and authentication fails. Use a keytab for production deployments.
+</Warning>
+
+## Ticket-Granting Ticket (TGT) renewal
+
+Each Flink component that uses Kerberos manages TGT renewal independently:
+
+- **Keytab-based**: Renewal is automatic.
+- **Credential cache-based**: Renewal is the user's responsibility. If the TGT expires, Flink components cannot re-authenticate.
+
+## ZooKeeper SASL configuration
+
+When using ZooKeeper HA with Kerberos, configure the SASL parameters:
+
+```yaml
+# ZooKeeper service name (default: zookeeper)
+zookeeper.sasl.service-name: zookeeper
+
+# JAAS login context for ZooKeeper (must match an entry in security.kerberos.login.contexts)
+zookeeper.sasl.login-context-name: Client
+```
+
+Ensure `Client` is included in `security.kerberos.login.contexts`:
+
+```yaml
+security.kerberos.login.contexts: Client,KafkaClient
+```
+
+## Delegation tokens
+
+Starting with Flink 1.17, Flink supports delegation tokens for Hadoop-based services (HDFS, HBase). Delegation tokens allow non-local processes to authenticate without carrying a full Kerberos credential.
+
+Flink obtains delegation tokens for:
+- The Hadoop default filesystem
+- Filesystems configured in `security.kerberos.access.hadoopFileSystems`
+- The YARN staging directory
+- HBase (when HBase is on the classpath and `hbase.security.authentication=kerberos` is set)
+
+Custom delegation token providers can be plugged in via Java's `ServiceLoader` mechanism by implementing `org.apache.flink.runtime.security.token.DelegationTokenProvider`.
+
+## Sharing credentials across jobs
+
+All jobs running on the same Flink cluster share the Kerberos credentials configured for that cluster. To use different credentials for a specific job, start a separate Flink cluster with a different configuration. Multiple Flink clusters can run side-by-side in Kubernetes and YARN environments.

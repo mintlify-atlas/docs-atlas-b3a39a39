@@ -1,0 +1,491 @@
+---
+title: "DataStream API Quickstart"
+description: "Build a stateful fraud detection application with the Flink DataStream API using Java or Python. Learn StreamExecutionEnvironment, keyBy, KeyedProcessFunction, and ValueState."
+---
+
+The DataStream API is Flink's core API for building stateful, event-driven stream processing applications. It gives you fine-grained control over state, time, and processing logic, making it ideal for complex use cases like fraud detection, anomaly detection, and real-time enrichment.
+
+## What you'll build
+
+In this tutorial you will build a fraud detection system that processes a stream of credit card transactions and emits an alert whenever it detects a suspicious pattern: a small transaction (under $1.00) immediately followed by a large one (over $500.00) on the same account.
+
+```
+Transactions (source) → keyBy(accountId) → FraudDetector (KeyedProcessFunction) → Alerts (sink)
+```
+
+You'll learn how to:
+- Set up a `StreamExecutionEnvironment`
+- Partition a stream by key with `keyBy`
+- Implement stateful logic with `KeyedProcessFunction`
+- Use `ValueState` for per-key fault-tolerant state
+- Run a Flink job from an IDE or the command line
+
+## Prerequisites
+
+<Tabs>
+  <Tab title="Java">
+    - Java 11, 17, or 21
+    - Maven 3.8.6 or later
+    - An IDE (IntelliJ IDEA recommended)
+  </Tab>
+  <Tab title="Python">
+    - Java 11, 17, or 21
+    - Python 3.9, 3.10, 3.11, or 3.12
+    - PyFlink: `pip install apache-flink`
+  </Tab>
+</Tabs>
+
+---
+
+## Steps
+
+<Steps>
+  <Step title="Create the project">
+    <Tabs>
+      <Tab title="Java (Maven archetype)">
+        Generate a skeleton project using the Flink Maven archetype:
+
+        ```bash
+        mvn archetype:generate \
+            -DarchetypeGroupId=org.apache.flink \
+            -DarchetypeArtifactId=flink-walkthrough-datastream-java \
+            -DarchetypeVersion=1.20.0 \
+            -DgroupId=frauddetection \
+            -DartifactId=frauddetection \
+            -Dversion=0.1 \
+            -Dpackage=frauddetection \
+            -DinteractiveMode=false
+        ```
+
+        Maven creates a `frauddetection/` directory containing `FraudDetectionJob.java`, `FraudDetector.java`, and pre-configured `pom.xml` with the `flink-streaming-java` and `flink-walkthrough-common` dependencies.
+
+        <Note>
+          If you are running the latest SNAPSHOT version of Flink, use the corresponding snapshot version number in `-DarchetypeVersion`. The archetype is only published for released versions.
+        </Note>
+
+        **IntelliJ IDEA note:** If you see `java.lang.NoClassDefFoundError` when running in the IDE, go to **Run → Edit Configurations → Modify options** and select **Include dependencies with 'Provided' scope**.
+      </Tab>
+      <Tab title="Python">
+        Create a new file called `fraud_detection.py`. No project scaffold is needed — PyFlink provides all dependencies via the `apache-flink` pip package.
+
+        ```bash
+        python -m pip install apache-flink
+        touch fraud_detection.py
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Set up the execution environment">
+    The `StreamExecutionEnvironment` is the entry point for every DataStream application. It lets you configure execution properties and create sources.
+
+    <Tabs>
+      <Tab title="Java">
+        ```java FraudDetectionJob.java
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        ```
+      </Tab>
+      <Tab title="Python">
+        ```python fraud_detection.py
+        from pyflink.datastream import StreamExecutionEnvironment
+
+        env = StreamExecutionEnvironment.get_execution_environment()
+        env.set_parallelism(1)
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Create a source">
+    Sources ingest data from external systems into Flink. The walkthrough uses generated transaction data so you can run the example without any external infrastructure.
+
+    <Tabs>
+      <Tab title="Java">
+        The archetype includes a `TransactionSource` backed by a `DataGeneratorSource` that produces an infinite stream of credit card transactions. Each `Transaction` has an `accountId`, `timestamp`, and `amount`.
+
+        ```java FraudDetectionJob.java
+        DataStream<Transaction> transactions = env
+            .fromSource(
+                TransactionSource.unbounded(),
+                WatermarkStrategy.noWatermarks(),
+                "transactions");
+        ```
+
+        `fromSource` takes three arguments: the source connector, a watermark strategy (this job uses processing time so watermarks are not needed), and a display name used in the Web UI.
+      </Tab>
+      <Tab title="Python">
+        Use a static collection of tuples representing `(account_id, timestamp, amount)`:
+
+        ```python fraud_detection.py
+        from pyflink.common.typeinfo import Types
+
+        transactions_data = [
+            (1, 1000, 188.23),
+            (2, 1001, 0.50),    # small transaction
+            (2, 1002, 600.00),  # large transaction after small -> ALERT
+            (3, 1003, 42.00),
+            (1, 1004, 0.89),    # small transaction
+            (1, 1005, 300.00),  # not large enough -> no alert
+            (4, 1006, 0.10),    # small transaction
+            (4, 1007, 520.00),  # large transaction after small -> ALERT
+            (3, 1008, 0.75),    # small transaction
+            (3, 1009, 800.00),  # large transaction after small -> ALERT
+        ]
+
+        transactions = env.from_collection(
+            transactions_data,
+            type_info=Types.TUPLE([Types.LONG(), Types.LONG(), Types.DOUBLE()])
+        )
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Partition by key and apply the fraud detector">
+    To detect fraud per account, all transactions for the same `accountId` must be routed to the same operator instance. `keyBy` achieves this by partitioning the stream. The `process()` call applies your `FraudDetector` function in a *keyed context*, meaning each invocation sees state scoped to the current account.
+
+    <Tabs>
+      <Tab title="Java">
+        ```java FraudDetectionJob.java
+        DataStream<Alert> alerts = transactions
+            .keyBy(Transaction::getAccountId)
+            .process(new FraudDetector())
+            .name("fraud-detector");
+        ```
+      </Tab>
+      <Tab title="Python">
+        ```python fraud_detection.py
+        from pyflink.datastream.functions import KeyedProcessFunction
+
+        alerts = transactions \
+            .key_by(lambda t: t[0]) \
+            .process(FraudDetector())
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Write results to a sink">
+    A sink writes results to an external system. For this tutorial, print the alerts to the console.
+
+    <Tabs>
+      <Tab title="Java">
+        ```java FraudDetectionJob.java
+        alerts
+            .addSink(new AlertSink())
+            .name("send-alerts");
+
+        env.execute("Fraud Detection");
+        ```
+
+        `AlertSink` (provided by the archetype) logs each `Alert` at INFO level. `env.execute()` triggers actual job execution — without this call the job graph is built but never run.
+      </Tab>
+      <Tab title="Python">
+        ```python fraud_detection.py
+        alerts.print()
+        env.execute("Fraud Detection")
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Implement the FraudDetector">
+    The `FraudDetector` extends `KeyedProcessFunction`, which provides per-key state and timer access. The business rule: flag an account when a small transaction (< $1.00) occurs, then emit an alert if the *next* transaction for that account is large (> $500.00).
+
+    The flag must be stored in managed state, not a plain Java field, because Flink processes transactions from many accounts with a single `FraudDetector` instance. A plain field would be shared across all keys.
+
+    <Tabs>
+      <Tab title="Java">
+        ```java FraudDetector.java
+        import org.apache.flink.api.common.functions.OpenContext;
+        import org.apache.flink.api.common.state.ValueState;
+        import org.apache.flink.api.common.state.ValueStateDescriptor;
+        import org.apache.flink.api.common.typeinfo.Types;
+        import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+        import org.apache.flink.util.Collector;
+        import org.apache.flink.walkthrough.common.entity.Alert;
+        import org.apache.flink.walkthrough.common.entity.Transaction;
+
+        public class FraudDetector extends KeyedProcessFunction<Long, Transaction, Alert> {
+
+            private static final long serialVersionUID = 1L;
+
+            private static final double SMALL_AMOUNT = 1.00;
+            private static final double LARGE_AMOUNT = 500.00;
+
+            private transient ValueState<Boolean> flagState;
+
+            @Override
+            public void open(OpenContext openContext) {
+                ValueStateDescriptor<Boolean> flagDescriptor = new ValueStateDescriptor<>(
+                        "flag",
+                        Types.BOOLEAN);
+                flagState = getRuntimeContext().getState(flagDescriptor);
+            }
+
+            @Override
+            public void processElement(
+                    Transaction transaction,
+                    Context context,
+                    Collector<Alert> collector) throws Exception {
+
+                // Get the flag for this account (null if never set)
+                Boolean lastTransactionWasSmall = flagState.value();
+
+                if (lastTransactionWasSmall != null) {
+                    if (transaction.getAmount() > LARGE_AMOUNT) {
+                        Alert alert = new Alert();
+                        alert.setId(transaction.getAccountId());
+                        collector.collect(alert);
+                    }
+                    // Clear the flag regardless — pattern is complete or broken
+                    flagState.clear();
+                }
+
+                if (transaction.getAmount() < SMALL_AMOUNT) {
+                    flagState.update(true);
+                }
+            }
+        }
+        ```
+
+        `ValueState` is registered in `open()`, which runs once before processing begins. `ValueState` is always scoped to the current key (account ID), so each account has its own independent flag. The three `ValueState` methods are:
+        - `value()` — read current value, returns `null` if not set
+        - `update(value)` — write a new value
+        - `clear()` — delete the value for the current key
+      </Tab>
+      <Tab title="Python">
+        ```python fraud_detection.py
+        from pyflink.common.typeinfo import Types
+        from pyflink.datastream import StreamExecutionEnvironment
+        from pyflink.datastream.functions import KeyedProcessFunction, RuntimeContext
+        from pyflink.datastream.state import ValueStateDescriptor
+
+
+        class FraudDetector(KeyedProcessFunction):
+
+            SMALL_AMOUNT = 1.00
+            LARGE_AMOUNT = 500.00
+
+            def __init__(self):
+                self.flag_state = None
+
+            def open(self, runtime_context: RuntimeContext):
+                descriptor = ValueStateDescriptor("flag", Types.BOOLEAN())
+                self.flag_state = runtime_context.get_state(descriptor)
+
+            def process_element(self, transaction, ctx: 'KeyedProcessFunction.Context'):
+                # transaction is a tuple: (account_id, timestamp, amount)
+                account_id = transaction[0]
+                amount = transaction[2]
+
+                last_transaction_was_small = self.flag_state.value()
+
+                if last_transaction_was_small is not None:
+                    if amount > self.LARGE_AMOUNT:
+                        yield f"Alert{{id={account_id}}}"
+                    self.flag_state.clear()
+
+                if amount < self.SMALL_AMOUNT:
+                    self.flag_state.update(True)
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Run the application">
+    <Tabs>
+      <Tab title="Java">
+        Run the `FraudDetectionJob` class from your IDE. You should see alerts logged by `AlertSink`:
+
+        ```
+        2024-01-01 14:22:06,220 INFO  org.apache.flink.walkthrough.common.sink.AlertSink - Alert{id=3}
+        2024-01-01 14:22:11,383 INFO  org.apache.flink.walkthrough.common.sink.AlertSink - Alert{id=3}
+        2024-01-01 14:22:16,551 INFO  org.apache.flink.walkthrough.common.sink.AlertSink - Alert{id=3}
+        ```
+
+        The job runs continuously because `TransactionSource.unbounded()` generates transactions indefinitely. Stop it manually when done.
+      </Tab>
+      <Tab title="Python">
+        Run the script:
+
+        ```bash
+        python fraud_detection.py
+        ```
+
+        Expected output:
+
+        ```
+        Alert{id=2}
+        Alert{id=4}
+        Alert{id=3}
+        ```
+
+        Accounts 2, 4, and 3 each had a small transaction immediately followed by a large one.
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+---
+
+## Complete programs
+
+<CodeGroup>
+
+```java FraudDetectionJob.java
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.walkthrough.common.entity.Alert;
+import org.apache.flink.walkthrough.common.entity.Transaction;
+import org.apache.flink.walkthrough.common.source.TransactionSource;
+import org.apache.flink.walkthrough.common.sink.AlertSink;
+
+public class FraudDetectionJob {
+
+    public static void main(String[] args) throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+        DataStream<Transaction> transactions = env
+            .fromSource(
+                TransactionSource.unbounded(),
+                WatermarkStrategy.noWatermarks(),
+                "transactions");
+
+        DataStream<Alert> alerts = transactions
+            .keyBy(Transaction::getAccountId)
+            .process(new FraudDetector())
+            .name("fraud-detector");
+
+        alerts
+            .addSink(new AlertSink())
+            .name("send-alerts");
+
+        env.execute("Fraud Detection");
+    }
+}
+```
+
+```java FraudDetector.java
+import org.apache.flink.api.common.functions.OpenContext;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.util.Collector;
+import org.apache.flink.walkthrough.common.entity.Alert;
+import org.apache.flink.walkthrough.common.entity.Transaction;
+
+public class FraudDetector extends KeyedProcessFunction<Long, Transaction, Alert> {
+
+    private static final long serialVersionUID = 1L;
+    private static final double SMALL_AMOUNT = 1.00;
+    private static final double LARGE_AMOUNT = 500.00;
+
+    private transient ValueState<Boolean> flagState;
+
+    @Override
+    public void open(OpenContext openContext) {
+        ValueStateDescriptor<Boolean> flagDescriptor = new ValueStateDescriptor<>("flag", Types.BOOLEAN);
+        flagState = getRuntimeContext().getState(flagDescriptor);
+    }
+
+    @Override
+    public void processElement(Transaction transaction, Context context, Collector<Alert> collector) throws Exception {
+        Boolean lastTransactionWasSmall = flagState.value();
+
+        if (lastTransactionWasSmall != null) {
+            if (transaction.getAmount() > LARGE_AMOUNT) {
+                Alert alert = new Alert();
+                alert.setId(transaction.getAccountId());
+                collector.collect(alert);
+            }
+            flagState.clear();
+        }
+
+        if (transaction.getAmount() < SMALL_AMOUNT) {
+            flagState.update(true);
+        }
+    }
+}
+```
+
+```python fraud_detection.py
+from pyflink.common.typeinfo import Types
+from pyflink.datastream import StreamExecutionEnvironment
+from pyflink.datastream.functions import KeyedProcessFunction, RuntimeContext
+from pyflink.datastream.state import ValueStateDescriptor
+
+
+class FraudDetector(KeyedProcessFunction):
+
+    SMALL_AMOUNT = 1.00
+    LARGE_AMOUNT = 500.00
+
+    def __init__(self):
+        self.flag_state = None
+
+    def open(self, runtime_context: RuntimeContext):
+        descriptor = ValueStateDescriptor("flag", Types.BOOLEAN())
+        self.flag_state = runtime_context.get_state(descriptor)
+
+    def process_element(self, transaction, ctx: 'KeyedProcessFunction.Context'):
+        account_id = transaction[0]
+        amount = transaction[2]
+
+        last_transaction_was_small = self.flag_state.value()
+
+        if last_transaction_was_small is not None:
+            if amount > self.LARGE_AMOUNT:
+                yield f"Alert{{id={account_id}}}"
+            self.flag_state.clear()
+
+        if amount < self.SMALL_AMOUNT:
+            self.flag_state.update(True)
+
+
+def fraud_detection():
+    env = StreamExecutionEnvironment.get_execution_environment()
+    env.set_parallelism(1)
+
+    transactions_data = [
+        (1, 1000, 188.23),
+        (2, 1001, 0.50),
+        (2, 1002, 600.00),
+        (3, 1003, 42.00),
+        (1, 1004, 0.89),
+        (1, 1005, 300.00),
+        (4, 1006, 0.10),
+        (4, 1007, 520.00),
+        (3, 1008, 0.75),
+        (3, 1009, 800.00),
+    ]
+
+    transactions = env.from_collection(
+        transactions_data,
+        type_info=Types.TUPLE([Types.LONG(), Types.LONG(), Types.DOUBLE()])
+    )
+
+    alerts = transactions \
+        .key_by(lambda t: t[0]) \
+        .process(FraudDetector())
+
+    alerts.print()
+    env.execute("Fraud Detection")
+
+
+if __name__ == '__main__':
+    fraud_detection()
+```
+
+</CodeGroup>
+
+---
+
+## What's next
+
+- **Add timers** — The current detector does not enforce a time constraint between the two transactions. See [Event-Driven Applications](https://nightlies.apache.org/flink/flink-docs-stable/docs/learn-flink/event_driven/) to learn how to add a 1-minute timer so the fraud pattern expires.
+- **DataStream API reference** — Explore all operators, state backends, and connector APIs in the [DataStream API documentation](https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/datastream/overview/).
+- **Table API Quickstart** — Try the higher-level [Table API](/get-started/table-api-quickstart) for aggregation pipelines.
+- **SQL Quickstart** — Query streaming data interactively in the [SQL Client](/get-started/sql-quickstart).

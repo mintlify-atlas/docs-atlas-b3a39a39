@@ -1,0 +1,299 @@
+---
+title: "PyFlink FAQ"
+description: "Frequently asked questions about PyFlink installation, compatibility, UDFs, and performance."
+---
+
+<AccordionGroup>
+  <Accordion title="How do I install PyFlink?">
+    Install PyFlink with pip:
+
+    ```bash
+    pip install apache-flink
+    ```
+
+    PyFlink requires **Java 11 or 17** and **Python 3.8–3.12**. Verify your versions before installing:
+
+    ```bash
+    java -version   # must be 11.x or 17.x
+    python --version  # must be 3.8–3.12
+    ```
+
+    If you need Arrow-based (pandas) UDFs, also install:
+
+    ```bash
+    pip install pyarrow pandas
+    ```
+  </Accordion>
+
+  <Accordion title="Which Python versions are supported?">
+    PyFlink supports **Python 3.8, 3.9, 3.10, 3.11, and 3.12**.
+
+    Python 2 is not supported. Python 3.7 and earlier 3.x versions are no longer supported as of recent Flink releases.
+
+    The Python version used by your UDF workers must match the version used to install PyFlink. If you use a virtual environment or `add_python_archive()`, configure the interpreter path explicitly:
+
+    ```python
+    t_env.get_config().set("python.executable", "/path/to/python3.10")
+    ```
+  </Accordion>
+
+  <Accordion title="Which Java versions are supported?">
+    Flink requires **Java 11 or Java 17**. Java 8 is no longer supported.
+
+    Set `JAVA_HOME` if Java is not on your `PATH`:
+
+    ```bash
+    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+    ```
+
+    Check your Java version:
+
+    ```bash
+    java -version
+    # Expected: openjdk version "17.x.x" ...
+    ```
+  </Accordion>
+
+  <Accordion title="How do I check the PyFlink version?">
+    ```python
+    import pyflink
+    print(pyflink.__version__)
+    ```
+
+    Or from the command line:
+
+    ```bash
+    python -c "import pyflink; print(pyflink.__version__)"
+    ```
+
+    The PyFlink version is tied to the Flink release (e.g., `2.0.0`). Make sure your connector JARs match this version.
+  </Accordion>
+
+  <Accordion title="How do I wait for jobs to finish when running in mini-cluster mode?">
+    When you run a Table API job in a Flink mini-cluster (local Python process), call `.wait()` after `execute_insert()`:
+
+    ```python
+    # Wait for the job to complete (required in mini-cluster mode)
+    table.execute_insert("my_sink").wait()
+    ```
+
+    Without `.wait()`, the local Python process may exit before the job finishes producing output.
+
+    On a **remote cluster**, omit `.wait()`—the call returns immediately after job submission, and the cluster runs the job asynchronously:
+
+    ```python
+    # On a remote cluster, do NOT call .wait()
+    table.execute_insert("my_sink")
+    ```
+
+    For the DataStream API, always call `env.execute()` to trigger execution. In remote mode, it returns after submission.
+  </Accordion>
+
+  <Accordion title="Why does my UDF fail with ModuleNotFoundError on the cluster?">
+    Your local Python environment has the library, but the task managers do not. Use one of these approaches to distribute it:
+
+    **Option 1: requirements file**
+
+    ```python
+    t_env.set_python_requirements("/path/to/requirements.txt")
+    ```
+
+    Flink installs the packages on each task manager before running UDFs.
+
+    **Option 2: pre-built virtual environment**
+
+    ```bash
+    python -m venv pyflink_venv
+    source pyflink_venv/bin/activate
+    pip install numpy pandas scikit-learn
+    deactivate
+    zip -r pyflink_venv.zip pyflink_venv/
+    ```
+
+    ```python
+    t_env.add_python_archive("pyflink_venv.zip", "pyflink_venv")
+    t_env.get_config().set(
+        "python.executable",
+        "pyflink_venv/pyflink_venv/bin/python",
+    )
+    ```
+
+    The virtual environment must be created for the same OS and CPU architecture as the task managers.
+  </Accordion>
+
+  <Accordion title="How do I use a Kafka connector from PyFlink?">
+    Download the Kafka SQL connector JAR for your Flink version and add it to your job:
+
+    ```python
+    t_env.get_config().set(
+        "pipeline.jars",
+        "file:///path/to/flink-sql-connector-kafka-1.20.0.jar",
+    )
+    ```
+
+    Then define a Kafka table:
+
+    ```python
+    t_env.execute_sql("""
+        CREATE TABLE events (
+            id    BIGINT,
+            data  STRING
+        ) WITH (
+            'connector'                    = 'kafka',
+            'topic'                        = 'my-topic',
+            'properties.bootstrap.servers' = 'localhost:9092',
+            'properties.group.id'          = 'my-group',
+            'scan.startup.mode'            = 'latest-offset',
+            'format'                       = 'json'
+        )
+    """)
+    ```
+
+    See the [Connectors](/apis/python/connectors) page for more detail.
+  </Accordion>
+
+  <Accordion title="Can I use pandas and NumPy inside a UDF?">
+    Yes. For best performance, use Arrow-based (vectorized) UDFs so that Flink passes entire batches of rows as `pandas.Series` objects rather than individual values:
+
+    ```python
+    import pandas as pd
+    import numpy as np
+    from pyflink.table import DataTypes
+    from pyflink.table.udf import udf
+
+    @udf(result_type=DataTypes.DOUBLE(), func_type="pandas")
+    def normalize(s: pd.Series) -> pd.Series:
+        return (s - s.mean()) / s.std()
+    ```
+
+    Requires `pyarrow` and `pandas` to be installed:
+
+    ```bash
+    pip install pyarrow pandas
+    ```
+  </Accordion>
+
+  <Accordion title="Why is my Python UDF slow?">
+    Python UDFs have overhead because data must cross the JVM–Python boundary. Common solutions:
+
+    1. **Use Arrow-based UDFs** (`func_type="pandas"`) to process batches instead of individual rows. This is the single most impactful optimization.
+
+       ```python
+       @udf(result_type=DataTypes.DOUBLE(), func_type="pandas")
+       def fast_udf(s: pd.Series) -> pd.Series:
+           return s * 2.0
+       ```
+
+    2. **Increase bundle size** to reduce JVM–Python round trips:
+
+       ```python
+       t_env.get_config().set("python.fn-execution.bundle.size", "100000")
+       ```
+
+    3. **Move logic to SQL or Java** if it can be expressed without Python—Java operators have no serialization overhead.
+
+    4. **Profile your UDF** to find the actual bottleneck:
+
+       ```python
+       t_env.get_config().set("python.profile.enabled", "true")
+       ```
+  </Accordion>
+
+  <Accordion title="How do I pass job parameters to a Python UDF?">
+    Use `FunctionContext.get_job_parameter()` inside your UDF's `open()` method:
+
+    ```python
+    from pyflink.table.udf import ScalarFunction, FunctionContext
+
+    class ConfigurableUDF(ScalarFunction):
+        def open(self, context: FunctionContext):
+            self.multiplier = float(
+                context.get_job_parameter("multiplier", "1.0")
+            )
+
+        def eval(self, value):
+            return value * self.multiplier
+    ```
+
+    Pass the parameter when submitting the job:
+
+    ```bash
+    flink run --python job.py -D multiplier=2.5
+    ```
+
+    Or set it programmatically:
+
+    ```python
+    t_env.get_config().set("pipeline.global-job-parameters", "multiplier=2.5")
+    ```
+  </Accordion>
+
+  <Accordion title="Can I mix the Table API and DataStream API in the same job?">
+    Yes. Use `StreamTableEnvironment` instead of `TableEnvironment`, which provides conversion methods between tables and data streams:
+
+    ```python
+    from pyflink.datastream import StreamExecutionEnvironment
+    from pyflink.table import StreamTableEnvironment
+
+    env = StreamExecutionEnvironment.get_execution_environment()
+    t_env = StreamTableEnvironment.create(env)
+
+    # Table → DataStream
+    table = t_env.from_path("my_source")
+    ds = t_env.to_data_stream(table)
+
+    # DataStream operations
+    ds = ds.filter(lambda r: r[0] > 0)
+
+    # DataStream → Table
+    from pyflink.table import Schema, DataTypes
+    result_table = t_env.from_data_stream(
+        ds,
+        Schema.new_builder().column("value", DataTypes.BIGINT()).build(),
+    )
+    result_table.execute_insert("my_sink").wait()
+    ```
+  </Accordion>
+
+  <Accordion title="How do I enable checkpointing in a PyFlink job?">
+    Call `enable_checkpointing()` on the `StreamExecutionEnvironment`:
+
+    ```python
+    from pyflink.datastream import StreamExecutionEnvironment
+    from pyflink.datastream.checkpointing_mode import CheckpointingMode
+
+    env = StreamExecutionEnvironment.get_execution_environment()
+
+    # Checkpoint every 10 seconds, exactly-once semantics
+    env.enable_checkpointing(10_000, CheckpointingMode.EXACTLY_ONCE)
+
+    # Configure checkpoint storage (e.g., filesystem)
+    from pyflink.datastream.checkpoint_storage import FileSystemCheckpointStorage
+    env.get_checkpoint_config().set_checkpoint_storage(
+        FileSystemCheckpointStorage("hdfs:///flink/checkpoints")
+    )
+    ```
+
+    For Table API jobs, configure checkpointing through the `StreamExecutionEnvironment` and then create a `StreamTableEnvironment` on top of it.
+  </Accordion>
+
+  <Accordion title="What dependencies does PyFlink require?">
+    PyFlink's Python package depends on:
+
+    | Dependency | Version constraint |
+    |---|---|
+    | Py4J | `0.10.9.7` |
+    | CloudPickle | `2.2.0` |
+    | python-dateutil | `>=2.8.0,<3` |
+    | Apache Beam | `>=2.54.0,<=2.61.0` |
+
+    Optional dependencies for Arrow/pandas UDFs:
+
+    | Dependency | Install with |
+    |---|---|
+    | pyarrow | `pip install pyarrow` |
+    | pandas | `pip install pandas` |
+
+    These are installed automatically with `pip install apache-flink` (except `pyarrow` and `pandas`, which are optional).
+  </Accordion>
+</AccordionGroup>

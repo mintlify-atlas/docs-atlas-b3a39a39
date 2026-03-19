@@ -1,0 +1,182 @@
+---
+title: "Application Profiling"
+description: "How to profile Flink applications using Java Flight Recorder, async profiler, heap dumps, and thread dumps."
+---
+
+Profiling helps you identify CPU hotspots, memory leaks, GC pressure, and blocking operations in Flink jobs. Flink provides several mechanisms for profiling TaskManager and JobManager JVM processes.
+
+## Log-based debugging
+
+Each Flink daemon writes stdout and stderr to a file with an `.out` suffix and internal logging to a `.log` file. Configure Java options to produce additional diagnostic files alongside the standard logs using `FLINK_LOG_PREFIX`:
+
+```yaml
+# config.yaml
+env.java.opts.all: "-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=${FLINK_LOG_PREFIX}.hprof"
+```
+
+Files using `FLINK_LOG_PREFIX` rotate with the standard `.out` and `.log` files.
+
+## Java Flight Recorder (JFR)
+
+Java Flight Recorder is a low-overhead profiling and event collection framework built into the JDK (Oracle JDK and OpenJDK 11+). It records JVM-level events—thread activity, GC, memory allocation, I/O—with minimal impact on the running application.
+
+### Enabling JFR at startup
+
+```yaml
+# config.yaml
+env.java.opts.all: >-
+  -XX:+UnlockDiagnosticVMOptions
+  -XX:+FlightRecorder
+  -XX:+DebugNonSafepoints
+  -XX:FlightRecorderOptions=defaultrecording=true,dumponexit=true,dumponexitpath=${FLINK_LOG_PREFIX}.jfr
+```
+
+The recording is written to a `.jfr` file when the JVM exits. Open it with [JDK Mission Control](https://www.oracle.com/java/technologies/jdk-mission-control.html) to analyse:
+
+- Method profiling (CPU hotspots)
+- Memory allocation and GC events
+- Thread states and lock contention
+- Exception frequency
+
+### Recording on a running process
+
+For a running TaskManager, start a JFR recording using `jcmd`:
+
+```bash
+# Find the TaskManager PID
+ps aux | grep TaskManager
+
+# Start a 60-second recording
+jcmd <pid> JFR.start duration=60s filename=/tmp/taskmanager.jfr
+
+# Or dump an ongoing recording
+jcmd <pid> JFR.dump filename=/tmp/taskmanager-snapshot.jfr
+```
+
+## Heap dumps
+
+Heap dumps capture the full state of the Java heap for offline analysis with tools like [Eclipse MAT](https://www.eclipse.org/mat/) or [JDK Mission Control](https://www.oracle.com/java/technologies/jdk-mission-control.html).
+
+### Automatic heap dump on OOM
+
+```yaml
+# config.yaml
+env.java.opts.all: >-
+  -XX:+HeapDumpOnOutOfMemoryError
+  -XX:HeapDumpPath=${FLINK_LOG_PREFIX}.hprof
+```
+
+The heap dump is written when an `OutOfMemoryError` occurs. Analyse it to find:
+- Objects consuming the most memory
+- Retained object graphs indicating memory leaks
+- Unexpected large collections
+
+### On-demand heap dump
+
+```bash
+# Trigger a heap dump from a running TaskManager
+jmap -dump:format=b,file=/tmp/heap-$(date +%s).hprof <pid>
+```
+
+<Warning>
+Heap dumps on busy JVMs can pause the process for seconds to minutes while the heap is serialised. Avoid triggering them on production TaskManagers handling latency-sensitive workloads.
+</Warning>
+
+## Thread dumps via REST API
+
+Flink exposes thread dump endpoints that let you capture thread stacks from any TaskManager without SSH access:
+
+```bash
+# Get a thread dump from a specific TaskManager
+curl http://jobmanager:8081/v1/taskmanagers/:taskmanagerid/thread-dump
+```
+
+The response is a JSON object with thread names, states, and full stack traces. This is useful for diagnosing:
+
+- Tasks stuck in `BLOCKED` or `WAITING` state (lock contention, I/O)
+- Deadlocks
+- Threads spending time in GC or JVM safepoint operations
+
+```bash
+# Get TaskManager IDs first
+curl http://jobmanager:8081/v1/taskmanagers | jq '.taskmanagers[].id'
+
+# Then get a thread dump
+curl http://jobmanager:8081/v1/taskmanagers/container_xyz_000001/thread-dump | \
+  jq '.threadInfos[] | select(.state == "BLOCKED")'
+```
+
+## Garbage collection analysis
+
+GC pauses can manifest as high operator latency, checkpoint timeouts, or apparent back-pressure. Enable GC logging:
+
+```yaml
+# config.yaml (Java 9+)
+env.java.opts.all: >-
+  -Xlog:gc*:file=${FLINK_LOG_PREFIX}.gc.log:time,uptime:filecount=10,filesize=10m
+```
+
+```yaml
+# config.yaml (Java 8)
+env.java.opts.all: >-
+  -Xloggc:${FLINK_LOG_PREFIX}.gc.log
+  -XX:+PrintGCApplicationStoppedTime
+  -XX:+PrintGCDetails
+  -XX:+PrintGCDateStamps
+  -XX:+UseGCLogFileRotation
+  -XX:NumberOfGCLogFiles=10
+  -XX:GCLogFileSize=10M
+```
+
+Analyse GC logs with [GCEasy](https://gceasy.io) or [GCViewer](https://github.com/chewiebug/GCViewer) to identify:
+- Full GC frequency and duration
+- Heap growth trends
+- Long stop-the-world pauses
+
+## Memory debug logging
+
+Enable TaskManager memory usage logging to track Flink's managed memory consumption over time:
+
+```yaml
+taskmanager.debug.memory.log: true
+taskmanager.debug.memory.log-interval: 10000  # log every 10 seconds
+```
+
+This adds periodic memory usage summaries to the TaskManager log at DEBUG level.
+
+## JIT compiler analysis
+
+For CPU-bound jobs where JIT compilation behaviour is relevant, [JITWatch](https://github.com/AdoptOpenJDK/jitwatch/wiki) can visualise the HotSpot JIT compiler's decisions:
+
+```yaml
+env.java.opts.all: >-
+  -XX:+UnlockDiagnosticVMOptions
+  -XX:+TraceClassLoading
+  -XX:+LogCompilation
+  -XX:LogFile=${FLINK_LOG_PREFIX}.jit
+  -XX:+PrintAssembly
+```
+
+<Warning>
+`-XX:+LogCompilation` and `-XX:+PrintAssembly` produce very large log files on long-running applications. Use them only during short profiling sessions.
+</Warning>
+
+## Profiling workflow
+
+<Steps>
+  <Step title="Identify the bottleneck">
+    Check the Web UI for back-pressure indicators (red operators) and low throughput. Review checkpoint duration metrics to distinguish state-size problems from CPU or I/O problems.
+  </Step>
+  <Step title="Collect a thread dump">
+    Use the REST API to collect a thread dump from the suspected TaskManager. Look for threads in `BLOCKED` or `WAITING` states.
+  </Step>
+  <Step title="Enable flame graphs">
+    Enable `rest.flamegraph.enabled: true` and check the Flame Graph tab in the Web UI to identify CPU hotspots at the operator level.
+  </Step>
+  <Step title="Start a JFR recording">
+    For deeper analysis, start a 2–5 minute JFR recording on the target TaskManager and open it in JDK Mission Control.
+  </Step>
+  <Step title="Analyse and act">
+    Based on findings, tune serializers, reduce state size, adjust parallelism, or optimise user code hotspots.
+  </Step>
+</Steps>

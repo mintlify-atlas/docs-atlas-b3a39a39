@@ -1,0 +1,262 @@
+---
+title: "SSL/TLS Configuration"
+description: "Secure Flink's internal and external network communication with SSL/TLS, including mutual TLS setup, certificate generation, and YARN/Kubernetes deployment tips."
+---
+
+By default, Flink does not encrypt or authenticate its network connections. This page explains how to enable TLS/SSL for communication between Flink processes (internal) and from external clients to Flink (external/REST).
+
+## Internal vs. external connectivity
+
+Flink distinguishes between two types of network communication:
+
+| Type | Connections covered |
+|---|---|
+| **Internal** | RPC between JobManager, TaskManager, Dispatcher, ResourceManager; data shuffles between TaskManagers; BLOB service (JAR distribution) |
+| **External / REST** | Web UI, REST API, CLI communication with the JobManager/Dispatcher |
+
+Security for internal and external connectivity is configured independently. You can enable both, either, or neither.
+
+### Internal connectivity: mutual TLS
+
+All internal connections use **mutual authentication (mTLS)**: both sides of every connection present their certificate. This means a single shared certificate/key pair can secure the entire internal network.
+
+Because both sides use the same certificate, the keystore and truststore can be identical files. Hostname verification is skipped, which simplifies container-based deployments.
+
+### External / REST connectivity
+
+The REST endpoint uses server-side TLS by default. Clients (web browser, CLI) connect to Flink over HTTPS but are not authenticated by default. For authenticated access, deploy a reverse proxy (e.g., Envoy or NGINX) in front of the REST endpoint rather than enabling mutual TLS on the REST layer directly.
+
+## Enabling SSL
+
+```yaml
+# Enable SSL for internal connections (RPC, data plane, BLOB service)
+security.ssl.internal.enabled: true
+
+# Enable SSL for external/REST connections
+security.ssl.rest.enabled: true
+```
+
+The legacy `security.ssl.enabled` option enables both simultaneously (kept for backwards compatibility).
+
+You can disable SSL for individual internal connection types when `security.ssl.internal.enabled` is true:
+
+```yaml
+# Disable SSL for data transfer between TaskManagers (default: true)
+taskmanager.data.ssl.enabled: false
+
+# Disable SSL for BLOB transfers from JobManager to TaskManagers (default: true)
+blob.service.ssl.enabled: false
+
+# Disable SSL for Pekko RPC (default: true)
+pekko.ssl.enabled: false
+```
+
+## Generating certificates
+
+### Internal connectivity (self-signed, shared certificate)
+
+The simplest setup uses one self-signed certificate for all internal connections:
+
+```bash
+keytool -genkeypair \
+  -alias flink.internal \
+  -keystore internal.keystore \
+  -dname "CN=flink.internal" \
+  -storepass internal_store_password \
+  -keyalg RSA \
+  -keysize 4096 \
+  -storetype PKCS12
+```
+
+Because the certificate is self-signed and shared, use the same file as both keystore and truststore:
+
+```yaml
+security.ssl.internal.enabled: true
+security.ssl.internal.keystore: /path/to/flink/conf/internal.keystore
+security.ssl.internal.truststore: /path/to/flink/conf/internal.keystore
+security.ssl.internal.keystore-password: internal_store_password
+security.ssl.internal.truststore-password: internal_store_password
+security.ssl.internal.key-password: internal_store_password
+```
+
+### REST endpoint (simple self-signed)
+
+For the REST endpoint, include the JobManager hostname and IP in the Subject Alternative Names:
+
+```bash
+# Generate key pair with SANs
+keytool -genkeypair \
+  -alias flink.rest \
+  -keystore rest.keystore \
+  -dname "CN=myhost.company.org" \
+  -ext "SAN=dns:myhost.company.org,ip:10.0.2.15" \
+  -storepass rest_keystore_password \
+  -keyalg RSA \
+  -keysize 4096 \
+  -storetype PKCS12
+
+# Export certificate
+keytool -exportcert \
+  -keystore rest.keystore \
+  -alias flink.rest \
+  -storepass rest_keystore_password \
+  -file flink.cer
+
+# Create truststore with the exported certificate
+keytool -importcert \
+  -keystore rest.truststore \
+  -alias flink.rest \
+  -storepass rest_truststore_password \
+  -file flink.cer \
+  -noprompt
+```
+
+```yaml
+security.ssl.rest.enabled: true
+security.ssl.rest.keystore: /path/to/flink/conf/rest.keystore
+security.ssl.rest.truststore: /path/to/flink/conf/rest.truststore
+security.ssl.rest.keystore-password: rest_keystore_password
+security.ssl.rest.truststore-password: rest_truststore_password
+security.ssl.rest.key-password: rest_keystore_password
+```
+
+### REST endpoint (CA-signed certificate)
+
+For production, sign the REST certificate with a CA:
+
+```bash
+# Create a self-signed CA
+keytool -genkeypair -alias ca -keystore ca.keystore \
+  -dname "CN=Sample CA" -storepass ca_keystore_password \
+  -keyalg RSA -keysize 4096 -ext "bc=ca:true" -storetype PKCS12
+
+# Export CA certificate
+keytool -exportcert -keystore ca.keystore -alias ca \
+  -storepass ca_keystore_password -file ca.cer
+
+# Create CA truststore
+keytool -importcert -keystore ca.truststore -alias ca \
+  -storepass ca_truststore_password -file ca.cer -noprompt
+
+# Create REST keystore and generate a CSR
+keytool -genkeypair -alias flink.rest -keystore rest.signed.keystore \
+  -dname "CN=flink.company.org" -ext "SAN=dns:flink.company.org" \
+  -storepass rest_keystore_password -keyalg RSA -keysize 4096 -storetype PKCS12
+keytool -certreq -alias flink.rest -keystore rest.signed.keystore \
+  -storepass rest_keystore_password -file rest.csr
+
+# Sign the CSR with the CA
+keytool -gencert -alias ca -keystore ca.keystore \
+  -storepass ca_keystore_password \
+  -ext "SAN=dns:flink.company.org,ip:10.0.2.15" \
+  -infile rest.csr -outfile rest.cer
+
+# Import CA cert and signed cert into REST keystore
+keytool -importcert -keystore rest.signed.keystore \
+  -storepass rest_keystore_password -file ca.cer -alias ca -noprompt
+keytool -importcert -keystore rest.signed.keystore \
+  -storepass rest_keystore_password -file rest.cer -alias flink.rest -noprompt
+```
+
+```yaml
+security.ssl.rest.enabled: true
+security.ssl.rest.keystore: /path/to/flink/conf/rest.signed.keystore
+security.ssl.rest.truststore: /path/to/flink/conf/ca.truststore
+security.ssl.rest.keystore-password: rest_keystore_password
+security.ssl.rest.key-password: rest_keystore_password
+security.ssl.rest.truststore-password: ca_truststore_password
+```
+
+## Mutual TLS for REST (optional)
+
+To require clients to authenticate themselves to the REST endpoint:
+
+```yaml
+security.ssl.rest.authentication-enabled: true
+```
+
+With mutual authentication enabled, the keystore and truststore are used by both the REST server and clients (CLI, `curl`, etc.).
+
+## Cipher suites
+
+Flink's default cipher suites align with current security recommendations and modern JDK defaults:
+
+```
+TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+```
+
+These provide forward secrecy and strong encryption. Customize them if your environment requires specific cipher suites:
+
+```yaml
+security.ssl.algorithms: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+```
+
+<Warning>
+  If the configured cipher suites are not supported by your JDK, Flink processes will fail to connect to each other. Ensure all nodes use a compatible Java version.
+</Warning>
+
+## Certificate fingerprint pinning
+
+If you use a CA-signed internal certificate (not self-signed), the truststore trusts all certificates from that CA. To prevent unauthorized certificates from being accepted, pin the specific certificate by its fingerprint:
+
+```yaml
+security.ssl.internal.cert.fingerprint: 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00
+```
+
+Get the fingerprint of an existing certificate:
+
+```bash
+keytool -printcert -file flink.cer | grep SHA256
+```
+
+## YARN deployment tips
+
+- **Internal certificates**: Configure the same way as standalone. The keystore and truststore must be present on all YARN nodes.
+- **REST certificate**: Issue it with a wildcard DNS name or multiple SANs to cover all hosts the JobManager may be deployed to.
+- **Distributing keystores**: Use YARN's ship files option to distribute keystores automatically:
+  ```bash
+  flink run -m yarn-cluster -yt deploy-keys/ flinkapp.jar
+  ```
+- **YARN proxy HTTPS**: Add the custom CA certificate to the default Java truststore on all YARN Proxy nodes so the proxy can verify Flink's HTTPS URL.
+
+## Querying REST over HTTPS with curl
+
+Convert the keystore to PEM format:
+
+```bash
+openssl pkcs12 \
+  -passin pass:rest_keystore_password \
+  -in rest.keystore \
+  -out rest.pem \
+  -nodes
+```
+
+Query the REST endpoint:
+
+```bash
+# Server-side TLS only
+curl --cacert rest.pem https://flink-host:8081/jobs
+
+# Mutual TLS
+curl --cacert rest.pem --cert rest.pem https://flink-host:8081/jobs
+```
+
+## SSL configuration reference
+
+| Option | Description |
+|---|---|
+| `security.ssl.internal.enabled` | Enable SSL for all internal connections |
+| `security.ssl.rest.enabled` | Enable SSL for REST/external connections |
+| `security.ssl.internal.keystore` | Path to internal keystore |
+| `security.ssl.internal.keystore-password` | Password for the internal keystore |
+| `security.ssl.internal.key-password` | Password for the internal private key |
+| `security.ssl.internal.truststore` | Path to internal truststore |
+| `security.ssl.internal.truststore-password` | Password for the internal truststore |
+| `security.ssl.internal.cert.fingerprint` | Pin a specific certificate by SHA-256 fingerprint |
+| `security.ssl.rest.keystore` | Path to REST keystore |
+| `security.ssl.rest.keystore-password` | Password for the REST keystore |
+| `security.ssl.rest.key-password` | Password for the REST private key |
+| `security.ssl.rest.truststore` | Path to REST truststore |
+| `security.ssl.rest.truststore-password` | Password for the REST truststore |
+| `security.ssl.rest.authentication-enabled` | Require client certificates on REST connections |
+| `security.ssl.algorithms` | Comma-separated list of allowed cipher suites |

@@ -1,0 +1,123 @@
+---
+title: "Hybrid Source"
+description: "Combine multiple Flink sources in sequence to read bounded historical data and then switch seamlessly to a real-time unbounded source."
+---
+
+`HybridSource` lets you chain a list of concrete sources so that they execute sequentially as a single source in the Flink job graph. This is particularly useful for **bootstrap** use cases where you need to first read historical data (for example, files on S3 or HDFS) and then continue reading from a real-time stream (for example, Kafka) without interrupting the application.
+
+Prior to `HybridSource`, implementing this pattern required building a topology with multiple source operators and writing custom switching logic. `HybridSource` encapsulates that complexity: from the perspective of the `DataStream` API, the entire sequence appears as a single source.
+
+For background, see [FLIP-150](https://cwiki.apache.org/confluence/display/FLINK/FLIP-150%3A+Introduce+Hybrid+Source).
+
+## Dependency
+
+```xml
+<dependency>
+  <groupId>org.apache.flink</groupId>
+  <artifactId>flink-connector-base</artifactId>
+  <version>${flink.version}</version>
+</dependency>
+```
+
+`flink-connector-base` is typically pulled in as a transitive dependency of the concrete source connectors (Kafka, FileSource, etc.).
+
+## How it works
+
+All sources in a `HybridSource` except the last one must be **bounded**. When a bounded source finishes, `HybridSource` automatically starts the next source. The last source may be bounded or unbounded. If it is unbounded, the `HybridSource` itself is unbounded.
+
+The sources share a single operator in the Flink job graph, which means:
+- Checkpointing and recovery work transparently across the switch.
+- Downstream operators see an uninterrupted stream of records.
+
+## Fixed start position (simple case)
+
+Use this pattern when you know the switch position upfront—for example, a specific timestamp that marks the end of the historical data range.
+
+```java
+import org.apache.flink.connector.file.src.FileSource;
+import org.apache.flink.connector.file.src.reader.TextLineInputFormat;
+import org.apache.flink.connector.base.source.hybrid.HybridSource;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.core.fs.Path;
+
+long switchTimestamp = ...; // derive from the last file's modification time, for example
+
+FileSource<String> fileSource = FileSource
+    .forRecordStreamFormat(new TextLineInputFormat(), Path.fromLocalFile(historyDir))
+    .build();
+
+KafkaSource<String> kafkaSource = KafkaSource.<String>builder()
+    .setBootstrapServers("localhost:9092")
+    .setTopics("events")
+    .setGroupId("my-group")
+    .setValueOnlyDeserializer(new SimpleStringSchema())
+    .setStartingOffsets(OffsetsInitializer.timestamp(switchTimestamp + 1))
+    .build();
+
+HybridSource<String> hybridSource = HybridSource.builder(fileSource)
+    .addSource(kafkaSource)
+    .build();
+
+DataStreamSource<String> stream = env.fromSource(
+    hybridSource,
+    WatermarkStrategy.noWatermarks(),
+    "Hybrid Source"
+);
+```
+
+## Dynamic start position (advanced case)
+
+Use this pattern when the file source reads a large backlog and the exact end position is not known until the file source finishes. This avoids accidentally skipping data due to Kafka retention expiring before the file source completes.
+
+You implement a `SourceFactory` that receives the completed enumerator from the previous source and uses its state to derive the start position for the next source.
+
+```java
+import org.apache.flink.api.connector.source.Boundedness;
+import org.apache.flink.connector.base.source.hybrid.HybridSource;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+
+// CustomFileSource.readTillOneDayFromLatest() returns a bounded FileSource
+// whose enumerator exposes getEndTimestamp().
+FileSource<String> fileSource = CustomFileSource.readTillOneDayFromLatest();
+
+HybridSource<String> hybridSource =
+    HybridSource.<String, CustomFileSplitEnumerator>builder(fileSource)
+        .addSource(
+            switchContext -> {
+                CustomFileSplitEnumerator previousEnumerator =
+                    switchContext.getPreviousEnumerator();
+                long switchTimestamp = previousEnumerator.getEndTimestamp();
+                return KafkaSource.<String>builder()
+                    .setBootstrapServers("localhost:9092")
+                    .setTopics("events")
+                    .setGroupId("my-group")
+                    .setValueOnlyDeserializer(new SimpleStringSchema())
+                    .setStartingOffsets(OffsetsInitializer.timestamp(switchTimestamp + 1))
+                    .build();
+            },
+            Boundedness.CONTINUOUS_UNBOUNDED)
+        .build();
+```
+
+<Note>
+For the dynamic position pattern to work, the previous source's enumerator must expose the information needed to configure the next source (for example, `getEndTimestamp()`). This may require a custom source implementation. Progress on adding dynamic end position support to `FileSource` is tracked in [FLINK-23633](https://issues.apache.org/jira/browse/FLINK-23633).
+</Note>
+
+## Builder API
+
+`HybridSource` is constructed via `HybridSource.builder(firstSource)`. The builder accepts additional sources with `.addSource(source)` or `.addSource(sourceFactory, boundedness)`.
+
+| Method | Description |
+|--------|-------------|
+| `HybridSource.builder(firstSource)` | Creates a builder with the first (bounded) source. |
+| `.addSource(source)` | Adds a subsequent source with a fixed configuration. |
+| `.addSource(sourceFactory, boundedness)` | Adds a source whose configuration is derived at switch time from the previous enumerator's state. |
+| `.build()` | Returns the configured `HybridSource`. |
+
+## Constraints
+
+- All sources except the last must be bounded. Providing an unbounded non-final source will cause a runtime error.
+- The parallelism of all sources in the `HybridSource` is the same—it cannot differ between stages.
+- Dynamic start position requires enumerator state to be accessible; this may require source customization.

@@ -1,0 +1,277 @@
+---
+title: "Metrics"
+description: "How to use Flink's metric system to monitor jobs, register custom metrics, and configure metric reporters."
+---
+
+Flink exposes a rich metric system that provides visibility into job behaviour, resource usage, checkpointing, and throughput. Metrics can be exposed to external monitoring systems via pluggable reporters.
+
+## Metric types
+
+Flink supports four metric types:
+
+<CardGroup cols={2}>
+  <Card title="Counter" icon="plus">
+    Monotonically increasing or decreasing integer count. Use for counting records processed, errors encountered, etc.
+  </Card>
+  <Card title="Gauge" icon="gauge">
+    A single value of any type, sampled at report time. Use for current queue depth, watermark lag, state size, etc.
+  </Card>
+  <Card title="Histogram" icon="chart-bar">
+    Distribution of long values (min, max, mean, percentiles). Use for latency distributions.
+  </Card>
+  <Card title="Meter" icon="clock">
+    Average rate of events per second. Use for throughput measurements.
+  </Card>
+</CardGroup>
+
+## Registering custom metrics
+
+Access the metric system from any `RichFunction` via `getRuntimeContext().getMetricGroup()`.
+
+### Counter
+
+```java
+public class MyMapper extends RichMapFunction<String, String> {
+    private transient Counter counter;
+
+    @Override
+    public void open(OpenContext ctx) {
+        this.counter = getRuntimeContext()
+            .getMetricGroup()
+            .counter("recordsProcessed");
+    }
+
+    @Override
+    public String map(String value) throws Exception {
+        this.counter.inc();
+        return value;
+    }
+}
+```
+
+### Gauge
+
+```java
+public class MyMapper extends RichMapFunction<String, String> {
+    private transient int queueDepth = 0;
+
+    @Override
+    public void open(OpenContext ctx) {
+        getRuntimeContext()
+            .getMetricGroup()
+            .gauge("queueDepth", () -> queueDepth);
+    }
+
+    @Override
+    public String map(String value) throws Exception {
+        queueDepth++;
+        return value;
+    }
+}
+```
+
+### Histogram
+
+Flink does not ship a built-in `Histogram` implementation. Use the Dropwizard wrapper:
+
+```xml
+<dependency>
+    <groupId>org.apache.flink</groupId>
+    <artifactId>flink-metrics-dropwizard</artifactId>
+    <version>${flink.version}</version>
+</dependency>
+```
+
+```java
+public class MyMapper extends RichMapFunction<Long, Long> {
+    private transient Histogram histogram;
+
+    @Override
+    public void open(OpenContext ctx) {
+        com.codahale.metrics.Histogram dropwizardHistogram =
+            new com.codahale.metrics.Histogram(new SlidingWindowReservoir(500));
+        this.histogram = getRuntimeContext()
+            .getMetricGroup()
+            .histogram("processingLatency",
+                       new DropwizardHistogramWrapper(dropwizardHistogram));
+    }
+
+    @Override
+    public Long map(Long value) throws Exception {
+        this.histogram.update(value);
+        return value;
+    }
+}
+```
+
+### Meter
+
+```java
+public class MyMapper extends RichMapFunction<Long, Long> {
+    private transient Meter meter;
+
+    @Override
+    public void open(OpenContext ctx) {
+        com.codahale.metrics.Meter dropwizardMeter = new com.codahale.metrics.Meter();
+        this.meter = getRuntimeContext()
+            .getMetricGroup()
+            .meter("recordsPerSecond",
+                   new DropwizardMeterWrapper(dropwizardMeter));
+    }
+
+    @Override
+    public Long map(Long value) throws Exception {
+        this.meter.markEvent();
+        return value;
+    }
+}
+```
+
+## Metric scopes and naming
+
+Every metric has an identifier composed of a system scope, an optional user scope, and a name. The default delimiter is `.`.
+
+### System scope formats
+
+| Level | Default scope format |
+|-------|---------------------|
+| JobManager | `<host>.jobmanager` |
+| JobManager + Job | `<host>.jobmanager.<job_name>` |
+| TaskManager | `<host>.taskmanager.<tm_id>` |
+| TaskManager + Job | `<host>.taskmanager.<tm_id>.<job_name>` |
+| Task | `<host>.taskmanager.<tm_id>.<job_name>.<task_name>.<subtask_index>` |
+| Operator | `<host>.taskmanager.<tm_id>.<job_name>.<operator_name>.<subtask_index>` |
+
+An operator metric named `myCounter` on `localhost` with TM `1234`, job `MyJob`, operator `MyOperator`, subtask `0` would produce:
+```
+localhost.taskmanager.1234.MyJob.MyOperator.0.myCounter
+```
+
+Customise scope formats in `config.yaml`:
+
+```yaml
+metrics.scope.operator: <host>.<job_name>.<task_name>.<operator_name>.<subtask_index>
+```
+
+### User-defined scope groups
+
+```java
+counter = getRuntimeContext()
+    .getMetricGroup()
+    .addGroup("MySubsystem")
+    .counter("myCounter");
+```
+
+This adds `MySubsystem` as an infix between the system scope and the metric name.
+
+## Key system metrics
+
+### Throughput metrics (Operator scope)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `numRecordsIn` | Counter | Total records received by this operator |
+| `numRecordsOut` | Counter | Total records emitted by this operator |
+| `numRecordsInPerSecond` | Meter | Input records per second |
+| `numRecordsOutPerSecond` | Meter | Output records per second |
+| `numBytesIn` | Counter | Total bytes received |
+| `numBytesOut` | Counter | Total bytes emitted |
+
+### Checkpointing metrics (Job scope)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `lastCheckpointDuration` | Gauge | Duration of the last completed checkpoint (ms) |
+| `lastCheckpointSize` | Gauge | Size of the last completed checkpoint (bytes) |
+| `lastCheckpointRestoreTimestamp` | Gauge | Timestamp of the last restore from a checkpoint |
+| `numberOfCompletedCheckpoints` | Counter | Total completed checkpoints |
+| `numberOfFailedCheckpoints` | Counter | Total failed checkpoints |
+| `numberOfInProgressCheckpoints` | Gauge | Currently in-progress checkpoints |
+
+### JVM metrics (Job-/TaskManager scope)
+
+| Metric | Infix | Type | Description |
+|--------|-------|------|-------------|
+| `Load` | `Status.JVM.CPU` | Gauge | Recent JVM CPU usage |
+| `Heap.Used` | `Status.JVM.Memory` | Gauge | JVM heap used (bytes) |
+| `Heap.Max` | `Status.JVM.Memory` | Gauge | JVM heap max (bytes) |
+| `NonHeap.Used` | `Status.JVM.Memory` | Gauge | Non-heap used (bytes) |
+| `Count` | `Status.JVM.GarbageCollector` | Gauge | Total GC collections |
+| `Time` | `Status.JVM.GarbageCollector` | Gauge | Total time spent in GC |
+| `Count` | `Status.JVM.Threads` | Gauge | Total live threads |
+
+### Back-pressure metrics (Task scope)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `isBackPressured` | Gauge | Whether the task is back-pressured |
+| `buffers.inputQueueLength` | Gauge | Number of queued input buffers |
+| `buffers.outputQueueLength` | Gauge | Number of queued output buffers |
+| `buffers.inPoolUsage` | Gauge | Input buffer pool usage (0.0–1.0) |
+| `buffers.outPoolUsage` | Gauge | Output buffer pool usage (0.0–1.0) |
+
+## Metric reporters
+
+Flink ships with reporters for several monitoring backends. Configure a reporter in `config.yaml`:
+
+### Prometheus
+
+```yaml
+metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+metrics.reporter.prom.port: 9249
+```
+
+Flink exposes metrics at `http://<host>:9249/metrics` in Prometheus text format. Scrape this endpoint from your Prometheus server:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: flink
+    static_configs:
+      - targets: ['taskmanager1:9249', 'taskmanager2:9249', 'jobmanager:9249']
+```
+
+### JMX
+
+```yaml
+metrics.reporter.jmx.factory.class: org.apache.flink.metrics.jmx.JMXReporterFactory
+metrics.reporter.jmx.port: 8789
+```
+
+### Graphite
+
+```yaml
+metrics.reporter.graphite.factory.class: org.apache.flink.metrics.graphite.GraphiteReporterFactory
+metrics.reporter.graphite.host: graphite-host
+metrics.reporter.graphite.port: 2003
+metrics.reporter.graphite.protocol: TCP
+```
+
+### StatsD
+
+```yaml
+metrics.reporter.statsd.factory.class: org.apache.flink.metrics.statsd.StatsDReporterFactory
+metrics.reporter.statsd.host: statsd-host
+metrics.reporter.statsd.port: 8125
+```
+
+You can configure multiple reporters simultaneously by giving each a unique name prefix:
+
+```yaml
+metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+metrics.reporter.prom.port: 9249
+metrics.reporter.jmx.factory.class: org.apache.flink.metrics.jmx.JMXReporterFactory
+metrics.reporter.jmx.port: 8789
+```
+
+## Custom metric variables
+
+You can attach custom variables (tags/labels) to all metrics reported by a given source or operator:
+
+```java
+DataStream<Event> stream = env
+    .fromSource(kafkaSource, watermarkStrategy, "KafkaSource")
+    .addMetricVariable("pipeline", "checkout");
+```
+
+When the reporter supports labels (e.g., Prometheus), `pipeline="checkout"` is attached to all metrics from that source. This allows you to filter and aggregate metrics in Grafana without changing metric names.

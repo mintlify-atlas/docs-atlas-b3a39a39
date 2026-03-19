@@ -1,0 +1,210 @@
+---
+title: "Fault Tolerance"
+description: "Configure Flink checkpointing, restart strategies, and delivery guarantees to make your DataStream applications resilient to failures."
+---
+
+Flink provides exactly-once or at-least-once fault tolerance for stateful streaming applications through **checkpointing** — periodic snapshots of all operator state and stream positions. When a task fails, Flink restores from the most recent successful checkpoint and replays the records that arrived after it.
+
+## How checkpointing works
+
+Checkpointing uses Chandy-Lamport distributed snapshots. Flink injects special **checkpoint barrier** records into the stream. When a barrier reaches an operator, the operator snapshots its current state and forwards the barrier downstream. The checkpoint completes when all operators have snapshotted their state and the barriers have reached all sinks.
+
+Prerequisites for reliable checkpointing:
+
+1. **Replayable sources**: The source must be able to re-read records since the last checkpoint position (e.g., Kafka topic offsets, file byte positions).
+2. **Durable state storage**: Checkpoint snapshots must be written to a persistent file system (HDFS, S3, etc.) rather than JobManager memory.
+
+## Enabling checkpointing
+
+Call `enableCheckpointing(interval)` on the environment. The interval is the time in milliseconds between the start of consecutive checkpoints.
+
+```java CheckpointingSetup.java
+StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+// Checkpoint every 1 second
+env.enableCheckpointing(1_000);
+```
+
+### Full configuration example
+
+```java CheckpointingConfig.java
+import org.apache.flink.streaming.api.environment.CheckpointConfig;
+import org.apache.flink.streaming.api.CheckpointingMode;
+import org.apache.flink.configuration.CheckpointingOptions;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.MemorySize;
+
+StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+// Enable checkpointing every 60 seconds
+env.enableCheckpointing(60_000);
+
+CheckpointConfig config = env.getCheckpointConfig();
+
+// Exactly-once semantics (default)
+config.setCheckpointingMode(CheckpointingMode.EXACTLY_ONCE);
+
+// Guarantee at least 500ms of stream progress between checkpoints
+config.setMinPauseBetweenCheckpoints(500);
+
+// Abort checkpoints that take longer than 5 minutes
+config.setCheckpointTimeout(300_000);
+
+// Tolerate up to 2 consecutive checkpoint failures before failing the job
+config.setTolerableCheckpointFailureNumber(2);
+
+// Only allow one checkpoint to be in progress at a time
+config.setMaxConcurrentCheckpoints(1);
+
+// Retain checkpoints when the job is cancelled (useful for debugging)
+config.setExternalizedCheckpointRetention(
+    CheckpointConfig.ExternalizedCheckpointRetention.RETAIN_ON_CANCELLATION
+);
+
+// Enable unaligned checkpoints (reduces checkpoint time under backpressure)
+config.enableUnalignedCheckpoints();
+
+// Configure checkpoint storage (use filesystem in production)
+Configuration storageConfig = new Configuration();
+storageConfig.set(CheckpointingOptions.CHECKPOINT_STORAGE, "filesystem");
+storageConfig.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, "hdfs:///flink-checkpoints");
+env.configure(storageConfig);
+```
+
+## Exactly-once vs. at-least-once
+
+Both modes use the same checkpointing mechanism. The difference is how **checkpoint barriers** are aligned:
+
+| Mode | Alignment | Latency | Guarantees |
+|------|-----------|---------|------------|
+| `EXACTLY_ONCE` | Barriers aligned before snapshot | Higher under backpressure | Each record affects state exactly once after recovery |
+| `AT_LEAST_ONCE` | No alignment — snapshot taken immediately | Lower | Records may be replayed and affect state more than once |
+
+Most applications should use `EXACTLY_ONCE`. Consider `AT_LEAST_ONCE` only when you need very low checkpoint latency (< a few milliseconds) and your application can tolerate duplicate processing.
+
+## Checkpoint storage
+
+By default, checkpoints are stored in the JobManager's JVM heap. This is unsafe for production — the state is lost if the JobManager restarts.
+
+Configure filesystem storage:
+
+```java
+Configuration config = new Configuration();
+config.set(CheckpointingOptions.CHECKPOINT_STORAGE, "filesystem");
+config.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, "s3://my-bucket/flink/checkpoints");
+env.configure(config);
+```
+
+Or configure it in `flink-conf.yaml` for cluster-wide defaults:
+
+```yaml flink-conf.yaml
+state.checkpoints.dir: hdfs:///flink/checkpoints
+```
+
+## Restart strategies
+
+When a task fails, Flink restarts it according to the configured restart strategy. The strategy controls how many retries are attempted and how long to wait between them.
+
+### Fixed-delay restart
+
+Retries up to a maximum number of times, waiting a fixed delay between each attempt.
+
+```java
+import org.apache.flink.api.common.restartstrategy.RestartStrategies;
+import java.time.Duration;
+
+env.setRestartStrategy(
+    RestartStrategies.fixedDelayRestart(
+        3,                       // maximum number of restart attempts
+        Duration.ofSeconds(10)   // delay between restarts
+    )
+);
+```
+
+### Exponential-delay restart
+
+Increases the delay between retries exponentially, up to a maximum. Useful for avoiding thundering-herd effects when an external system is recovering.
+
+```java
+env.setRestartStrategy(
+    RestartStrategies.exponentialDelayRestart(
+        Duration.ofSeconds(1),   // initial delay
+        Duration.ofMinutes(5),   // maximum delay
+        2.0,                     // multiplier
+        Duration.ofMinutes(10),  // reset threshold (resets delay after job runs for this long)
+        0.1                      // jitter factor
+    )
+);
+```
+
+### Failure-rate restart
+
+Allows up to N failures within a time interval. If the failure rate is exceeded, the job fails.
+
+```java
+env.setRestartStrategy(
+    RestartStrategies.failureRateRestart(
+        3,                          // max failures per interval
+        Duration.ofMinutes(5),      // failure rate measurement interval
+        Duration.ofSeconds(10)      // delay between restarts
+    )
+);
+```
+
+### No restart
+
+The job fails immediately on the first task failure. Useful for batch jobs where you prefer fast failure over retries.
+
+```java
+env.setRestartStrategy(RestartStrategies.noRestart());
+```
+
+### Default restart strategy
+
+If no strategy is set in application code, Flink uses the cluster-level default from `flink-conf.yaml`:
+
+```yaml flink-conf.yaml
+restart-strategy.type: fixed-delay
+restart-strategy.fixed-delay.attempts: 3
+restart-strategy.fixed-delay.delay: 10s
+```
+
+## Savepoints
+
+A **savepoint** is a manually triggered checkpoint. Unlike regular checkpoints, savepoints are never automatically deleted. You use them to:
+
+- Upgrade application code without losing state
+- Change parallelism of a running job
+- Migrate a job to a new cluster
+
+Trigger a savepoint via the CLI:
+
+```bash
+# Trigger savepoint and cancel the job
+bin/flink cancel --withSavepoint hdfs:///flink/savepoints <job-id>
+
+# Trigger savepoint without cancelling
+bin/flink savepoint <job-id> hdfs:///flink/savepoints
+```
+
+Resume from a savepoint:
+
+```bash
+bin/flink run -s hdfs:///flink/savepoints/savepoint-<id> my-job.jar
+```
+
+## Unaligned checkpoints
+
+Under heavy backpressure, aligned checkpoints can take a long time because barriers wait for all in-flight records to be processed before the snapshot is taken. Unaligned checkpoints include in-flight records in the checkpoint itself, so barriers no longer need to align. This reduces checkpoint duration but increases checkpoint size.
+
+```java
+env.getCheckpointConfig().enableUnalignedCheckpoints();
+```
+
+Unaligned checkpoints only work with `EXACTLY_ONCE` mode and at most one concurrent checkpoint.
+
+## Checkpointing with finished tasks
+
+Starting with Flink 1.14, checkpointing can continue even after some tasks have finished processing all their input (e.g., in mixed bounded/unbounded pipelines). This is enabled by default since Flink 1.15.
+
+Tasks that have finished do not contribute to subsequent checkpoints. Sinks using two-phase commit wait for a final checkpoint before the task exits, to ensure all committed transactions are included.

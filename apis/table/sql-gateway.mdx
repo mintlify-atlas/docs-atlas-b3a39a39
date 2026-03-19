@@ -1,0 +1,198 @@
+---
+title: "SQL Gateway"
+description: "The SQL Gateway is a long-running service that enables multiple clients to concurrently execute SQL queries against Flink via a REST API or HiveServer2 protocol."
+---
+
+The SQL Gateway is a standalone service that exposes Flink's SQL capabilities over a network protocol. Unlike the embedded SQL Client, the SQL Gateway is designed for production environments where multiple applications or users need to submit SQL queries concurrently to a shared Flink cluster.
+
+<CardGroup cols={2}>
+  <Card title="REST Endpoint" icon="globe">
+    Submit SQL via HTTP/REST — suitable for applications, notebooks, and BI tools using JDBC.
+  </Card>
+  <Card title="HiveServer2 Endpoint" icon="database">
+    Connect with tools that speak the HiveServer2 protocol (Beeline, DBeaver, Tableau).
+  </Card>
+</CardGroup>
+
+## Architecture
+
+The SQL Gateway is composed of:
+- **SqlGatewayService** — the core processing engine that manages sessions and executes statements
+- **Endpoints** — pluggable network listeners (REST, HiveServer2) that accept client connections
+
+Multiple clients can connect to a single SQL Gateway instance simultaneously, each with their own isolated session context.
+
+## Starting the SQL Gateway
+
+<Steps>
+  <Step title="Start a Flink cluster">
+    The SQL Gateway requires a running Flink cluster to submit jobs to:
+
+    ```bash
+    ./bin/start-cluster.sh
+    ```
+  </Step>
+  <Step title="Start the SQL Gateway">
+    Start the SQL Gateway with the REST endpoint:
+
+    ```bash
+    ./bin/sql-gateway.sh start -Dsql-gateway.endpoint.rest.address=localhost
+    ```
+
+    The gateway listens on port `8083` by default.
+  </Step>
+  <Step title="Verify the gateway is running">
+    Check the gateway status:
+
+    ```bash
+    curl http://localhost:8083/v1/info
+    ```
+
+    Expected response:
+
+    ```json
+    {"productName": "Apache Flink", "version": "2.0.0"}
+    ```
+  </Step>
+</Steps>
+
+## REST API
+
+The SQL Gateway REST API lets you open sessions, execute statements, and retrieve results programmatically.
+
+### Open a session
+
+```bash
+curl --request POST http://localhost:8083/v1/sessions
+```
+
+```json
+{"sessionHandle": "7c4f8d78-0f45-4a98-9eed-5ec8b3c123f5"}
+```
+
+The `sessionHandle` identifies your session for all subsequent requests.
+
+### Execute a SQL statement
+
+```bash
+curl --request POST \
+  http://localhost:8083/v1/sessions/{sessionHandle}/statements \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "statement": "SELECT name, COUNT(*) AS cnt FROM (VALUES ('"'"'Alice'"'"'), ('"'"'Bob'"'"'), ('"'"'Alice'"'"')) T(name) GROUP BY name"
+  }'
+```
+
+```json
+{"operationHandle": "a1b2c3d4-5678-..."}
+```
+
+### Poll for results
+
+```bash
+curl http://localhost:8083/v1/sessions/{sessionHandle}/operations/{operationHandle}/result/0
+```
+
+```json
+{
+  "resultType": "PAYLOAD",
+  "isQueryResult": true,
+  "jobID": null,
+  "resultKind": "SUCCESS_WITH_CONTENT",
+  "results": {
+    "columns": [
+      {"name": "name", "logicalType": {"type": "VARCHAR", "nullable": true}, "comment": null},
+      {"name": "cnt",  "logicalType": {"type": "BIGINT",  "nullable": false}, "comment": null}
+    ],
+    "data": [
+      {"kind": "INSERT", "fields": ["Alice", 2]},
+      {"kind": "INSERT", "fields": ["Bob",   1]}
+    ]
+  },
+  "nextResultUri": null
+}
+```
+
+### Close a session
+
+```bash
+curl --request DELETE http://localhost:8083/v1/sessions/{sessionHandle}
+```
+
+### Key REST endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v1/info` | Gateway version info |
+| `POST` | `/v1/sessions` | Open a new session |
+| `DELETE` | `/v1/sessions/{handle}` | Close a session |
+| `GET` | `/v1/sessions/{handle}` | Get session configuration |
+| `POST` | `/v1/sessions/{handle}/statements` | Execute a SQL statement |
+| `GET` | `/v1/sessions/{handle}/operations/{opHandle}/result/{token}` | Fetch results |
+| `DELETE` | `/v1/sessions/{handle}/operations/{opHandle}` | Cancel an operation |
+| `GET` | `/v1/sessions/{handle}/operations/{opHandle}/status` | Get operation status |
+
+## HiveServer2 endpoint
+
+The SQL Gateway can optionally expose a HiveServer2-compatible endpoint, allowing tools that support the HiveServer2 protocol to connect directly.
+
+Enable HiveServer2 in the Flink configuration:
+
+```yaml config.yaml
+sql-gateway.endpoint.type: rest,hiveserver2
+sql-gateway.endpoint.hiveserver2.host: localhost
+sql-gateway.endpoint.hiveserver2.thrift.port: 10000
+```
+
+Connect with Beeline:
+
+```bash
+beeline -u "jdbc:hive2://localhost:10000/default;auth=noSasl"
+```
+
+Connect with DBeaver using the Hive JDBC driver pointed at `localhost:10000`.
+
+<Note>
+HiveServer2 compatibility mode requires the Hive connector to be on the classpath. Add `flink-connector-hive` to `lib/`.
+</Note>
+
+## Configuration
+
+### Endpoint configuration
+
+```yaml config.yaml
+# REST endpoint
+sql-gateway.endpoint.rest.address: 0.0.0.0
+sql-gateway.endpoint.rest.port: 8083
+
+# Session defaults
+sql-gateway.session.timeout: 10min
+sql-gateway.session.max-num: 1000000
+sql-gateway.worker.threads.max: 500
+sql-gateway.worker.threads.min: 5
+```
+
+### Connecting from the SQL Client
+
+Use the SQL Client in gateway mode to send queries to the SQL Gateway:
+
+```bash
+./bin/sql-client.sh gateway --endpoint localhost:8083
+```
+
+## Managing sessions
+
+Sessions are isolated contexts. Each session maintains its own:
+- Catalog and database context
+- Configuration properties (SET statements)
+- Registered temporary tables and views
+
+Sessions expire after the configured `sql-gateway.session.timeout` (default: 10 minutes of inactivity).
+
+<Tip>
+For long-running operations, use the SQL Gateway with `--endpoint` mode from the SQL Client so that the SQL Client is just a thin frontend — the actual processing happens inside the gateway service.
+</Tip>
+
+<Warning>
+Each session competes for memory and execution resources. In production, limit `sql-gateway.session.max-num` and set an appropriate `sql-gateway.session.timeout` to prevent resource exhaustion.
+</Warning>

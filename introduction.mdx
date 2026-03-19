@@ -1,0 +1,179 @@
+---
+title: "Apache Flink"
+description: "Stateful computations over data streams — unified stream and batch processing at scale."
+---
+
+Apache Flink is an open-source, distributed stream processing framework built for high-throughput, low-latency data pipelines. It provides unified stream and batch processing on a single runtime, with exactly-once state consistency guarantees and native support for event-time semantics.
+
+<CardGroup cols={2}>
+  <Card title="Local Installation" icon="download" href="/get-started/local-installation">
+    Download and run Flink locally in minutes
+  </Card>
+  <Card title="DataStream Quickstart" icon="bolt" href="/get-started/datastream-quickstart">
+    Build your first streaming pipeline with the DataStream API
+  </Card>
+  <Card title="Table API & SQL Quickstart" icon="table" href="/get-started/table-api-quickstart">
+    Query streams and tables with SQL and the Table API
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/flink-architecture">
+    Understand Flink's architecture and programming model
+  </Card>
+</CardGroup>
+
+## Why Apache Flink
+
+<CardGroup cols={3}>
+  <Card title="Unified Processing" icon="merge">
+    Single runtime for both streaming and batch workloads — no separate systems to manage.
+  </Card>
+  <Card title="Exactly-Once Guarantees" icon="shield-check">
+    Built-in fault tolerance with checkpointing ensures exactly-once state consistency even after failures.
+  </Card>
+  <Card title="Event-Time Processing" icon="clock">
+    Native support for event-time semantics and out-of-order data using the Dataflow Model.
+  </Card>
+  <Card title="Stateful Computations" icon="database">
+    Rich state primitives (ValueState, ListState, MapState) backed by pluggable state backends including RocksDB.
+  </Card>
+  <Card title="High Throughput & Low Latency" icon="gauge">
+    Millions of events per second with millisecond latency — designed for demanding production workloads.
+  </Card>
+  <Card title="SQL & Table API" icon="code">
+    Declarative SQL and Table API for streaming and batch queries, with full ANSI SQL support.
+  </Card>
+</CardGroup>
+
+## Choose your API
+
+Flink provides multiple levels of abstraction to suit different use cases:
+
+<Tabs>
+  <Tab title="DataStream API">
+    The **DataStream API** is Flink's core API for building complex streaming and batch data pipelines in Java or Scala. It gives you full control over state, time, and fault tolerance.
+
+    ```java
+    StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+    DataStream<String> text = env.socketTextStream("localhost", 9999);
+
+    DataStream<Tuple2<String, Integer>> wordCounts = text
+        .flatMap((String line, Collector<Tuple2<String, Integer>> out) -> {
+            for (String word : line.split("\\s")) {
+                out.collect(Tuple2.of(word, 1));
+            }
+        })
+        .returns(Types.TUPLE(Types.STRING, Types.INT))
+        .keyBy(t -> t.f0)
+        .sum(1);
+
+    wordCounts.print();
+    env.execute("Word Count");
+    ```
+
+    <Card title="DataStream API Overview" icon="arrow-right" href="/apis/datastream/overview">
+      Get started with the DataStream API
+    </Card>
+  </Tab>
+  <Tab title="Table API & SQL">
+    The **Table API** and **SQL** provide a relational abstraction for both streaming and batch processing, making it easy to express complex queries and join streams with static tables.
+
+    ```java
+    StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+    StreamTableEnvironment tableEnv = StreamTableEnvironment.create(env);
+
+    // Register a source table
+    tableEnv.executeSql(
+        "CREATE TABLE orders (" +
+        "  order_id BIGINT," +
+        "  item STRING," +
+        "  amount DECIMAL(10, 2)," +
+        "  order_time TIMESTAMP(3)," +
+        "  WATERMARK FOR order_time AS order_time - INTERVAL '5' SECOND" +
+        ") WITH (" +
+        "  'connector' = 'kafka'," +
+        "  'topic' = 'orders'," +
+        "  'properties.bootstrap.servers' = 'localhost:9092'," +
+        "  'format' = 'json'" +
+        ")"
+    );
+
+    // Run a streaming SQL query
+    tableEnv.executeSql(
+        "SELECT item, SUM(amount) AS total " +
+        "FROM orders " +
+        "GROUP BY item"
+    ).print();
+    ```
+
+    <Card title="Table API & SQL Overview" icon="arrow-right" href="/apis/table/overview">
+      Get started with the Table API and SQL
+    </Card>
+  </Tab>
+  <Tab title="Python (PyFlink)">
+    **PyFlink** is the Python API for Apache Flink, supporting the DataStream API and Table API / SQL from Python.
+
+    ```python
+    from pyflink.datastream import StreamExecutionEnvironment
+    from pyflink.table import StreamTableEnvironment
+
+    env = StreamExecutionEnvironment.get_execution_environment()
+    t_env = StreamTableEnvironment.create(env)
+
+    t_env.execute_sql("""
+        CREATE TABLE orders (
+            order_id BIGINT,
+            item STRING,
+            amount DECIMAL(10, 2),
+            order_time TIMESTAMP(3),
+            WATERMARK FOR order_time AS order_time - INTERVAL '5' SECOND
+        ) WITH (
+            'connector' = 'kafka',
+            'topic' = 'orders',
+            'properties.bootstrap.servers' = 'localhost:9092',
+            'format' = 'json'
+        )
+    """)
+
+    t_env.execute_sql(
+        "SELECT item, SUM(amount) AS total FROM orders GROUP BY item"
+    ).print()
+    ```
+
+    <Card title="PyFlink Overview" icon="arrow-right" href="/apis/python/overview">
+      Get started with PyFlink
+    </Card>
+  </Tab>
+</Tabs>
+
+## Deployment options
+
+Flink runs on a variety of cluster environments:
+
+<CardGroup cols={3}>
+  <Card title="Standalone" icon="server" href="/deployment/resource-providers/standalone">
+    Deploy on any cluster without a resource manager
+  </Card>
+  <Card title="Kubernetes" icon="docker" href="/deployment/resource-providers/kubernetes">
+    Native Kubernetes integration with the Kubernetes Operator
+  </Card>
+  <Card title="YARN" icon="layer-group" href="/deployment/resource-providers/yarn">
+    Run Flink jobs on Apache Hadoop YARN clusters
+  </Card>
+</CardGroup>
+
+## Key resources
+
+<CardGroup cols={2}>
+  <Card title="Configuration reference" icon="sliders" href="/deployment/configuration">
+    All configuration options for Flink clusters and jobs
+  </Card>
+  <Card title="Checkpoints & savepoints" icon="floppy-disk" href="/ops/state/checkpoints">
+    Fault tolerance and operational state management
+  </Card>
+  <Card title="Metrics & monitoring" icon="chart-line" href="/ops/metrics">
+    Monitor cluster health and job performance
+  </Card>
+  <Card title="Connectors" icon="plug" href="/connectors/datastream/overview">
+    Connect Flink to Kafka, filesystems, JDBC, and more
+  </Card>
+</CardGroup>

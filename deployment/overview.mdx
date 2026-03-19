@@ -1,0 +1,115 @@
+---
+title: "Deployment Overview"
+description: "Overview of Apache Flink deployment architectures, components, and resource providers including standalone, YARN, and Kubernetes."
+---
+
+Flink is a versatile framework that supports many different deployment scenarios. This page describes the building blocks of a Flink cluster and the available deployment options.
+
+## Reference architecture
+
+Every Flink cluster consists of three core components: a **client**, a **JobManager**, and one or more **TaskManagers**.
+
+- The **client** takes your application code, compiles it into a `JobGraph`, and submits it to the JobManager.
+- The **JobManager** coordinates the distributed execution: it schedules tasks, tracks distributed checkpoints, and reacts to failures.
+- **TaskManagers** (also called workers) execute the actual operators — sources, transformations, and sinks.
+
+## Deployment modes
+
+Flink supports two modes for submitting jobs, which differ in cluster lifecycle, resource isolation, and where the application's `main()` method runs.
+
+<Tabs>
+  <Tab title="Application mode">
+    In Application mode, Flink creates a dedicated cluster for a single application. The application's `main()` method executes **on the JobManager**, which means:
+
+    - User JARs must be available on the classpath of all Flink components (typically in the `usrlib/` folder or bundled into the container image).
+    - Dependencies are not shipped via RPC from the client, making submission faster and cheaper.
+    - The cluster shuts down when the application finishes.
+    - Resource isolation is strong: each application has its own JobManager.
+
+    ```bash
+    # Submit an application-mode job to Kubernetes
+    ./bin/flink run \
+        --target kubernetes-application \
+        -Dkubernetes.cluster-id=my-app-cluster \
+        -Dkubernetes.container.image.ref=my-flink-image \
+        local:///opt/flink/usrlib/my-job.jar
+    ```
+
+    <Warning>
+      High availability is only supported for single-`execute()` applications in Application mode. If you use `executeAsync()` to run multiple jobs concurrently and one is cancelled, all jobs stop and the JobManager shuts down.
+    </Warning>
+  </Tab>
+  <Tab title="Session mode">
+    In Session mode, a single long-running cluster serves multiple submitted jobs. All jobs share the same TaskManagers and compete for resources.
+
+    - You pay the cluster startup cost once, not per job.
+    - A failing TaskManager affects all jobs running on it.
+    - The JobManager carries more bookkeeping load as the number of concurrent jobs grows.
+
+    ```bash
+    # Start a standalone session cluster, then submit jobs to it
+    ./bin/start-cluster.sh
+    ./bin/flink run ./examples/streaming/TopSpeedWindowing.jar
+    ```
+  </Tab>
+</Tabs>
+
+## Resource providers
+
+The JobManager has different implementations depending on where you deploy Flink. Choose the one that matches your infrastructure.
+
+<CardGroup cols={3}>
+  <Card title="Standalone" icon="server" href="/deployment/resource-providers/standalone">
+    Launch Flink directly as JVM processes. The simplest setup with no external dependencies. Suitable for local testing and on-premises clusters.
+  </Card>
+  <Card title="YARN" icon="layer-group" href="/deployment/resource-providers/yarn">
+    Deploy Flink on Apache Hadoop YARN. Flink dynamically allocates and releases TaskManager containers from YARN's ResourceManager.
+  </Card>
+  <Card title="Kubernetes" icon="dharmachakra" href="/deployment/resource-providers/kubernetes">
+    Native Kubernetes integration. Flink directly talks to the Kubernetes API to spawn and release pods as needed.
+  </Card>
+</CardGroup>
+
+## External components
+
+The following components are optional but important for production deployments.
+
+| Component | Purpose |
+|---|---|
+| **High Availability Service** | Enables JobManager failover. Supported backends: ZooKeeper and Kubernetes. |
+| **File storage** | Used for checkpointing and savepoints. Flink supports HDFS, S3, GCS, Azure Blob Storage, and local filesystems. |
+| **Metrics storage** | Flink components emit internal metrics. Supported reporters: Prometheus, Graphite, InfluxDB, and others. |
+| **Data sources and sinks** | External systems like Apache Kafka, Amazon S3, Elasticsearch, and Apache Cassandra that your jobs read from or write to. |
+
+## Repeatable resource cleanup
+
+When a job reaches a globally terminal state (finished, cancelled, or failed), Flink cleans up all associated external resources. If cleanup fails, Flink retries according to a configurable retry strategy.
+
+If the maximum number of retries is exhausted, the job is left in a **dirty state** and its artifacts must be cleaned up manually. Restarting the same job (using the same job ID) will restart the cleanup process rather than re-execute the job.
+
+<Note>
+  There is a known issue where CompletedCheckpoints that failed to be deleted during normal checkpoint management are not covered by repeatable cleanup. These must be deleted manually. See [FLINK-26606](https://issues.apache.org/jira/browse/FLINK-26606) for details.
+</Note>
+
+## Explore deployment options
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="sliders" href="/deployment/configuration">
+    Configure Flink using conf/config.yaml, environment variables, and dynamic properties.
+  </Card>
+  <Card title="CLI" icon="terminal" href="/deployment/cli">
+    Use the flink command-line interface to submit, monitor, and manage jobs.
+  </Card>
+  <Card title="High availability" icon="shield-check" href="/deployment/ha/overview">
+    Set up JobManager HA with ZooKeeper or Kubernetes to eliminate single points of failure.
+  </Card>
+  <Card title="Memory configuration" icon="memory" href="/deployment/memory/overview">
+    Understand and tune Flink's memory model for TaskManagers and JobManagers.
+  </Card>
+  <Card title="Elastic scaling" icon="arrows-maximize" href="/deployment/elastic-scaling">
+    Automatically adjust job parallelism at runtime using Reactive Mode and the Adaptive Scheduler.
+  </Card>
+  <Card title="Security" icon="lock" href="/deployment/security/ssl">
+    Secure Flink's network communication with SSL/TLS and authenticate with Kerberos.
+  </Card>
+</CardGroup>

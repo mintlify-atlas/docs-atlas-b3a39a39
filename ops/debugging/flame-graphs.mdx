@@ -1,0 +1,128 @@
+---
+title: "Flame Graphs"
+description: "How to enable and interpret flame graphs in the Flink Web UI to identify CPU and blocking bottlenecks."
+---
+
+Flame graphs are a visualisation for stack trace samples that let you immediately see which code paths consume the most CPU time in a running Flink job. Flink natively supports flame graphs in the Web UI since version 1.13.
+
+## What flame graphs show
+
+Flame graphs answer questions like:
+- Which methods are consuming the most CPU right now?
+- How much time is spent in user code vs. Flink framework code vs. serialization?
+- What call chain leads to the hot method?
+- Which tasks are blocked on I/O or lock acquisition?
+
+Flame graphs are constructed by sampling thread stack traces repeatedly. Each frame in the stack is represented as a horizontal bar. The width of a bar is proportional to how frequently that frame appeared across all samples—wider bars are hotter.
+
+## Enabling flame graphs
+
+Flame graphs are disabled by default to avoid any sampling overhead on production systems.
+
+```yaml
+# config.yaml
+rest.flamegraph.enabled: true
+```
+
+Restart the cluster or the relevant component after changing this setting.
+
+<Warning>
+Stack trace sampling has a small but nonzero CPU overhead. Enable flame graphs in development and pre-production environments. In production, enable them only during active incident investigation and disable them again afterwards.
+</Warning>
+
+## Generating a flame graph in the Web UI
+
+<Steps>
+  <Step title="Open the job graph">
+    Navigate to your running job in the Flink Web UI at `http://jobmanager:8081`.
+  </Step>
+  <Step title="Select an operator">
+    Click on the operator you want to profile in the job graph. A panel opens on the right side.
+  </Step>
+  <Step title="Open the Flame Graph tab">
+    Click the **Flame Graph** tab in the operator detail panel. Flink begins collecting stack samples from all task threads running that operator.
+  </Step>
+  <Step title="Wait for samples to accumulate">
+    The flame graph refreshes as new samples are collected. Wait a few seconds for enough samples to produce a meaningful visualisation.
+  </Step>
+</Steps>
+
+## Flame graph types
+
+The Web UI offers three flame graph views, selectable from the drop-down at the top of the pane:
+
+<Tabs>
+  <Tab title="On-CPU">
+    Shows only threads in `RUNNABLE` or `NEW` state. This visualises threads that are actively using CPU. Use this to find CPU hotspots—tight loops, expensive computations, serialization overhead.
+
+    Thread states included: `RUNNABLE`, `NEW`
+  </Tab>
+  <Tab title="Off-CPU">
+    Shows only threads in `TIMED_WAITING`, `WAITING`, or `BLOCKED` state. This visualises threads that are waiting—for I/O completion, lock acquisition, network responses, or sleep calls.
+
+    Use this to identify blocking operations: Kafka poll latency, HDFS reads, RocksDB compaction locks, or waiting on checkpointing.
+
+    Thread states included: `TIMED_WAITING`, `WAITING`, `BLOCKED`
+  </Tab>
+  <Tab title="Mixed">
+    Shows all threads regardless of state. Useful for getting a complete picture of where time is spent across both active and blocked work.
+  </Tab>
+</Tabs>
+
+## Sampling process
+
+Flink collects stack traces entirely within the JVM. Only Java-level method calls are visible; native system calls appear at the JVM boundary.
+
+By default, flame graphs are constructed at the **operator level**: all task threads for the selected operator are sampled in parallel and their stack traces are combined. If one parallel subtask is the bottleneck but others are not, the bottleneck may be averaged out.
+
+Starting with Flink 1.17, you can drill down to the **subtask level**:
+
+1. Select the operator in the job graph
+2. In the operator detail panel, click on a specific subtask
+3. The flame graph shows only that subtask's threads
+
+Use subtask-level flame graphs when you suspect data skew is causing one parallel instance to be much hotter than others.
+
+## Interpreting flame graphs
+
+### Reading the graph
+
+- **X-axis**: proportion of time (wider = more time spent in that method across all samples)
+- **Y-axis**: call stack depth (higher = deeper in the call chain)
+- **Colour**: random, used only to visually distinguish adjacent frames (not significant)
+- **Flat top**: a wide, flat top-of-stack frame is the actual hot method where CPU time is spent
+- **Wide base**: a wide base frame appears in many call chains but delegates to narrower children
+
+### Common patterns in Flink
+
+| Pattern | Likely cause |
+|---------|-------------|
+| Wide `map()` or `processElement()` frames | CPU-intensive user code |
+| Wide serialization frames (`InstantiationUtil`, `KryoSerializer`) | Serialization overhead; consider custom serializers or Avro/Protobuf |
+| Wide RocksDB frames (`RocksIterator.next()`, `RocksDB.get()`) | State access bottleneck; increase managed memory or tune RocksDB |
+| Wide network frames (`PartitionRequestClient`, `NettyMessage`) | Network back-pressure or slow downstream |
+| Tall off-CPU stacks with `Object.wait()` or `LockSupport.park()` | Threads blocked waiting; check for lock contention |
+| Wide GC frames in off-CPU graph | Frequent GC pauses; check heap sizing and GC configuration |
+
+### Example: diagnosing a serialization bottleneck
+
+If the on-CPU flame graph shows wide frames in Kryo serialization:
+
+1. Identify which state or output type is being serialized by Kryo
+2. Register the type with Flink's type system: `env.registerType(MyClass.class)`
+3. Or switch to an explicit Avro or Protobuf serializer for that type
+4. Regenerate the flame graph to confirm improvement
+
+## Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `rest.flamegraph.enabled` | `false` | Enable flame graph collection |
+| `rest.flamegraph.sample-interval` | 50 ms | Interval between stack trace samples |
+| `rest.flamegraph.delay-between-samples` | 50 ms | Delay between successive samples |
+| `rest.flamegraph.num-samples` | 100 | Number of samples per flame graph refresh |
+| `rest.flamegraph.cleanup-interval` | 10 min | How long to keep cached flame graph data |
+
+<Tip>
+For finer-grained profiles, reduce `rest.flamegraph.sample-interval` to 10–20 ms. This increases sampling frequency but also increases overhead.
+</Tip>

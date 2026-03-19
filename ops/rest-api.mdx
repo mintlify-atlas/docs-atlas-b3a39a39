@@ -1,0 +1,230 @@
+---
+title: "REST API"
+description: "Flink's REST API for querying job status, triggering savepoints, and managing the cluster programmatically."
+---
+
+Flink exposes a REST API for monitoring and managing jobs and cluster resources. The same API powers the Flink Web UI. You can use it with any HTTP client to integrate Flink into your own tooling or automation.
+
+## Overview
+
+The REST API is served by the JobManager's built-in web server. By default it listens on port `8081`. You can change the port in `config.yaml`:
+
+```yaml
+rest.port: 8081
+```
+
+In a high-availability setup, each JobManager exposes its own REST API endpoint. Only the currently elected leader returns information about running jobs; other JobManagers return information about jobs that ran during their tenure as leader.
+
+## API versioning
+
+All endpoints are versioned. Prefix URLs with the version to pin to a specific API version:
+
+```bash
+# Versioned request (preferred)
+curl http://jobmanager:8081/v1/jobs
+
+# Unversioned request (defaults to oldest supported version)
+curl http://jobmanager:8081/jobs
+```
+
+Requesting an unsupported version returns HTTP 404.
+
+## Key endpoints
+
+### Jobs
+
+**List all jobs:**
+
+```bash
+curl http://jobmanager:8081/v1/jobs
+```
+
+```json
+{
+  "jobs": [
+    { "id": "a5e0edd8e66b53f1b89c2041f91b8fd2", "status": "RUNNING" },
+    { "id": "c9e7d88f3c0b4a6789e012345678abcd", "status": "FINISHED" }
+  ]
+}
+```
+
+**Get job details:**
+
+```bash
+curl http://jobmanager:8081/v1/jobs/:jobid
+```
+
+**Get job exceptions:**
+
+```bash
+curl http://jobmanager:8081/v1/jobs/:jobid/exceptions
+```
+
+**Get job configuration:**
+
+```bash
+curl http://jobmanager:8081/v1/jobs/:jobid/config
+```
+
+### Stopping jobs
+
+**Stop a job with a savepoint (recommended):**
+
+```bash
+curl -X POST http://jobmanager:8081/v1/jobs/:jobid/stop \
+  -H 'Content-Type: application/json' \
+  -d '{"targetDirectory": "hdfs:///flink/savepoints", "drain": false}'
+```
+
+This returns a `request-id`. Poll the status:
+
+```bash
+curl http://jobmanager:8081/v1/jobs/:jobid/savepoints/:request-id
+```
+
+**Cancel a job immediately (no savepoint):**
+
+```bash
+curl -X PATCH http://jobmanager:8081/v1/jobs/:jobid?mode=cancel
+```
+
+### Savepoints
+
+**Trigger a savepoint:**
+
+```bash
+curl -X POST http://jobmanager:8081/v1/jobs/:jobid/savepoints \
+  -H 'Content-Type: application/json' \
+  -d '{"target-directory": "hdfs:///flink/savepoints", "cancel-job": false}'
+```
+
+**Check savepoint status:**
+
+```bash
+curl http://jobmanager:8081/v1/jobs/:jobid/savepoints/:triggerId
+```
+
+### Checkpoints
+
+**List checkpoint history:**
+
+```bash
+curl http://jobmanager:8081/v1/jobs/:jobid/checkpoints
+```
+
+**Get checkpoint details:**
+
+```bash
+curl http://jobmanager:8081/v1/jobs/:jobid/checkpoints/details/:checkpointid
+```
+
+**Get checkpoint statistics for a specific operator:**
+
+```bash
+curl http://jobmanager:8081/v1/jobs/:jobid/checkpoints/details/:checkpointid/subtasks/:vertexid
+```
+
+### Task managers
+
+**List all task managers:**
+
+```bash
+curl http://jobmanager:8081/v1/taskmanagers
+```
+
+```json
+{
+  "taskmanagers": [
+    {
+      "id": "container_1234_01_000002",
+      "path": "akka.tcp://flink@tm1:6122/user/rpc/taskmanager_0",
+      "dataPort": 41721,
+      "timeSinceLastHeartbeat": 1,
+      "slotsNumber": 4,
+      "freeSlots": 0
+    }
+  ]
+}
+```
+
+**Get task manager details:**
+
+```bash
+curl http://jobmanager:8081/v1/taskmanagers/:taskmanagerid
+```
+
+**Get a thread dump from a task manager:**
+
+```bash
+curl http://jobmanager:8081/v1/taskmanagers/:taskmanagerid/thread-dump
+```
+
+**Get task manager metrics:**
+
+```bash
+curl http://jobmanager:8081/v1/taskmanagers/:taskmanagerid/metrics?get=Status.JVM.Memory.Heap.Used
+```
+
+### Cluster
+
+**Get cluster overview:**
+
+```bash
+curl http://jobmanager:8081/v1/overview
+```
+
+**Get Flink configuration:**
+
+```bash
+curl http://jobmanager:8081/v1/jobmanager/config
+```
+
+**Get JobManager logs:**
+
+```bash
+curl http://jobmanager:8081/v1/jobmanager/logs
+```
+
+## Async operations
+
+Several operations (stop with savepoint, trigger savepoint, rescale) are asynchronous. They return a trigger ID that you use to poll for the result:
+
+<Steps>
+  <Step title="Trigger the operation">
+    ```bash
+    TRIGGER_RESPONSE=$(curl -s -X POST http://jobmanager:8081/v1/jobs/:jobid/savepoints \
+      -H 'Content-Type: application/json' \
+      -d '{"target-directory": "hdfs:///flink/savepoints"}')
+    TRIGGER_ID=$(echo $TRIGGER_RESPONSE | jq -r '."request-id"')
+    ```
+  </Step>
+  <Step title="Poll until complete">
+    ```bash
+    curl http://jobmanager:8081/v1/jobs/:jobid/savepoints/$TRIGGER_ID
+    ```
+
+    The response `status.id` will be `IN_PROGRESS` until complete, then `COMPLETED` or `FAILED`.
+  </Step>
+</Steps>
+
+You can set a custom trigger ID in the request body to safely retry without triggering multiple operations:
+
+```bash
+curl -X POST http://jobmanager:8081/v1/jobs/:jobid/savepoints \
+  -H 'Content-Type: application/json' \
+  -d '{"target-directory": "hdfs:///savepoints", "triggerId": "my-idempotency-key-123"}'
+```
+
+## Web UI
+
+The REST API and the Flink Web UI share the same port and server. Open `http://jobmanager:8081` in a browser to access the Web UI. The Web UI provides the same job management and monitoring capabilities through a graphical interface, including:
+
+- Job graph visualisation
+- Per-operator metrics and back-pressure indicators
+- Checkpoint history and statistics
+- Log access
+- Flame graphs (if enabled)
+
+<Note>
+The OpenAPI specification for the full set of endpoints is available at `/v1/api-docs` on your JobManager. The specification is experimental and subject to change.
+</Note>

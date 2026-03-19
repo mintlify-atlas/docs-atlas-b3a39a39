@@ -1,0 +1,272 @@
+---
+title: "Local Installation"
+description: "Download Apache Flink, start a local cluster, verify it is running, and submit your first job — three installation options covered: Docker, local binary, and PyFlink."
+---
+
+This guide gets a Flink cluster running on your machine. Choose one of three paths depending on your setup:
+
+- **Docker** — fastest start, no Java required, includes the SQL Client
+- **Local binary** — run Flink directly on your OS, requires Java
+- **PyFlink** — Python development with no separate cluster needed for local mode
+
+## Option A: Docker
+
+<Steps>
+  <Step title="Create the docker-compose.yml file">
+    Create a file named `docker-compose.yml` with the following content. It defines a JobManager, a TaskManager, and a SQL Client service:
+
+    ```yaml docker-compose.yml
+    services:
+      jobmanager:
+        image: flink:latest
+        ports:
+          - "8081:8081"
+        command: jobmanager
+        environment:
+          - |
+            FLINK_PROPERTIES=
+            jobmanager.rpc.address: jobmanager
+
+      taskmanager:
+        image: flink:latest
+        depends_on:
+          - jobmanager
+        command: taskmanager
+        scale: 1
+        environment:
+          - |
+            FLINK_PROPERTIES=
+            jobmanager.rpc.address: jobmanager
+            taskmanager.numberOfTaskSlots: 2
+
+      sql-client:
+        image: flink:latest
+        depends_on:
+          - jobmanager
+        command: bin/sql-client.sh
+        environment:
+          - |
+            FLINK_PROPERTIES=
+            jobmanager.rpc.address: jobmanager
+            rest.address: jobmanager
+    ```
+  </Step>
+
+  <Step title="Start the cluster">
+    ```bash
+    docker compose up -d
+    ```
+
+    Docker pulls the `flink:latest` image and starts the JobManager and TaskManager containers in the background.
+  </Step>
+
+  <Step title="Verify the cluster is running">
+    Open the Flink Web UI at [http://localhost:8081](http://localhost:8081). You should see the dashboard with one connected TaskManager and two available task slots.
+
+    <Note>
+      If the UI is not available immediately, wait a few seconds for the containers to finish starting.
+    </Note>
+  </Step>
+
+  <Step title="Start an interactive SQL session (optional)">
+    ```bash
+    docker compose run sql-client
+    ```
+
+    This opens the Flink SQL Client. Type `exit;` and press Enter to quit.
+  </Step>
+
+  <Step title="Stop the cluster">
+    ```bash
+    docker compose down
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Option B: Local installation
+
+### Prerequisites
+
+Flink runs on all UNIX-like environments (Linux, macOS, Cygwin/WSL on Windows). You need Java 11, 17, or 21 installed.
+
+Verify your Java version:
+
+```bash
+java -version
+```
+
+The output should show version 11, 17, or 21. If not, install a supported JDK before continuing.
+
+<Steps>
+  <Step title="Download and extract Flink">
+    Download the latest binary release from the [Apache Flink downloads page](https://flink.apache.org/downloads/) and extract the archive:
+
+    ```bash
+    tar -xzf flink-*.tgz
+    cd flink-*
+    ```
+
+    The extracted directory contains everything needed to run a local Flink cluster, including the `bin/`, `conf/`, `lib/`, and `examples/` directories.
+  </Step>
+
+  <Step title="Start the cluster">
+    ```bash
+    ./bin/start-cluster.sh
+    ```
+
+    This starts a local JobManager and a single TaskManager in the background. You should see output similar to:
+
+    ```
+    Starting cluster.
+    Starting standalonesession daemon on host localhost.
+    Starting taskexecutor daemon on host localhost.
+    ```
+  </Step>
+
+  <Step title="Verify the cluster is running">
+    Open the Flink Web UI at [http://localhost:8081](http://localhost:8081). The dashboard shows the connected TaskManagers and their available task slots.
+
+    Alternatively, check that the processes are running:
+
+    ```bash
+    ps aux | grep flink
+    ```
+  </Step>
+
+  <Step title="Run an example job">
+    Flink ships with built-in example programs in the `examples/` directory. Submit the streaming word count example:
+
+    ```bash
+    ./bin/flink run examples/streaming/WordCount.jar
+    ```
+
+    The job reads a built-in text and counts word occurrences. When it completes, check the output in the TaskManager logs:
+
+    ```bash
+    cat log/flink-*-taskexecutor-*.out
+    ```
+
+    You should see lines like:
+
+    ```
+    (nymph,1)
+    (in,3)
+    (thy,1)
+    (orisons,1)
+    (be,4)
+    ```
+
+    You can also view the completed job in the Web UI under **Completed Jobs**.
+  </Step>
+
+  <Step title="Start the SQL Client (optional)">
+    To open an interactive SQL session against your running cluster:
+
+    ```bash
+    ./bin/sql-client.sh
+    ```
+
+    Type `exit;` to quit the SQL Client.
+  </Step>
+
+  <Step title="Stop the cluster">
+    ```bash
+    ./bin/stop-cluster.sh
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Option C: PyFlink
+
+PyFlink lets you write Flink applications in Python using the Table API or DataStream API. During development, PyFlink runs in a local mini-cluster automatically — you do not need a separate Flink installation.
+
+### Prerequisites
+
+<Warning>
+  PyFlink requires both Java and Python. Make sure both are installed before proceeding.
+</Warning>
+
+```bash
+# Verify Java (11, 17, or 21 required)
+java -version
+
+# Verify Python (3.9, 3.10, 3.11, or 3.12 required)
+python --version
+```
+
+<Steps>
+  <Step title="Create a virtual environment (recommended)">
+    ```bash
+    python -m venv flink-env
+    source flink-env/bin/activate   # Linux/macOS
+    # flink-env\Scripts\activate    # Windows
+    ```
+
+    Using a virtual environment keeps PyFlink's dependencies isolated from your system Python packages.
+  </Step>
+
+  <Step title="Install PyFlink">
+    ```bash
+    python -m pip install apache-flink
+    ```
+
+    This installs the `apache-flink` package, which includes both the Python API bindings and the Flink runtime JARs.
+  </Step>
+
+  <Step title="Verify the installation">
+    ```bash
+    python -c "import pyflink; print(pyflink.__version__)"
+    ```
+
+    If the version number is printed without errors, PyFlink is correctly installed.
+  </Step>
+
+  <Step title="Run a test program">
+    Create a file `hello_flink.py`:
+
+    ```python hello_flink.py
+    from pyflink.table import TableEnvironment, EnvironmentSettings
+
+    settings = EnvironmentSettings.in_batch_mode()
+    t_env = TableEnvironment.create(settings)
+
+    table = t_env.from_elements([(1, 'Alice'), (2, 'Bob'), (3, 'Carol')], ['id', 'name'])
+    table.execute().print()
+    ```
+
+    Run it:
+
+    ```bash
+    python hello_flink.py
+    ```
+
+    Expected output:
+
+    ```
+    +----+----------------------+--------------------------------+
+    | op |                   id |                           name |
+    +----+----------------------+--------------------------------+
+    | +I |                    1 |                          Alice |
+    | +I |                    2 |                            Bob |
+    | +I |                    3 |                          Carol |
+    +----+----------------------+--------------------------------+
+    3 rows in set
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Next steps
+
+With a running cluster or PyFlink installed, choose a tutorial to continue:
+
+| Tutorial | Description | Requires |
+|----------|-------------|----------|
+| [SQL Quickstart](/get-started/sql-quickstart) | Query streaming data interactively with SQL | Option A or B |
+| [Table API Quickstart](/get-started/table-api-quickstart) | Build a streaming aggregation pipeline | Maven (Java) or Option C |
+| [DataStream API Quickstart](/get-started/datastream-quickstart) | Build a stateful fraud detection system | Maven (Java) or Option C |

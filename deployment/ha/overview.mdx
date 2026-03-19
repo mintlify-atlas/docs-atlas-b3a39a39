@@ -1,0 +1,72 @@
+---
+title: "High Availability Overview"
+description: "How Flink's JobManager high availability works, including leader election, state persistence, and available HA service implementations."
+---
+
+JobManager High Availability (HA) hardens a Flink cluster against JobManager failures. With HA enabled, Flink always continues executing your submitted jobs, even if the active JobManager crashes.
+
+## Why HA matters
+
+By default, each Flink cluster has a single JobManager. The JobManager is responsible for scheduling, resource management, and tracking distributed checkpoints. If it fails, no new jobs can be submitted and any running jobs fail.
+
+With HA configured, one or more **standby JobManagers** are ready to take over leadership if the active JobManager crashes. Failover is automatic and transparent to running jobs.
+
+## How Flink HA works
+
+At any point in time, exactly **one leading JobManager** is active. The others remain on standby waiting to be elected leader.
+
+Flink's HA services provide three capabilities:
+
+| Capability | Description |
+|---|---|
+| **Leader election** | Selects a single active JobManager from a pool of candidates |
+| **Service discovery** | Allows TaskManagers and clients to find the current leader |
+| **State persistence** | Stores recovery metadata so the successor can resume job execution |
+
+### What is persisted for recovery
+
+When a new JobManager takes over, it reads persisted state to resume jobs:
+
+- **JobGraph**: the logical execution plan of each submitted job
+- **User code JARs**: uploaded application JARs
+- **Completed checkpoint metadata**: location of the latest successful checkpoint for each job
+- **Leader pointers**: ZooKeeper/Kubernetes records pointing to the latest persisted state
+
+The heavy state (checkpoint data) lives in the file system at `high-availability.storageDir`. Only a small pointer to that storage is kept in ZooKeeper or Kubernetes.
+
+## Available HA services
+
+<CardGroup cols={2}>
+  <Card title="ZooKeeper HA" icon="sitemap" href="/deployment/ha/zookeeper">
+    Works with any Flink deployment. Requires a running ZooKeeper quorum. Uses ZooKeeper for leader election and stores metadata pointers.
+  </Card>
+  <Card title="Kubernetes HA" icon="dharmachakra" href="/deployment/ha/kubernetes">
+    Only available when running on Kubernetes. Uses Kubernetes ConfigMaps for metadata and the Kubernetes LeaderElection API for leader election. No external ZooKeeper required.
+  </Card>
+</CardGroup>
+
+## High availability data lifecycle
+
+Flink retains HA data only as long as the associated job is running or recovering. Once a job reaches a globally terminal state (finished, cancelled, or failed), Flink deletes all associated HA data, including metadata in ZooKeeper or Kubernetes and files in `high-availability.storageDir`.
+
+## JobResultStore
+
+The JobResultStore archives the final result of jobs that have reached a globally terminal state. Results are stored on a filesystem path configured via `job-result-store.storage-path`.
+
+Entries are marked as **dirty** while the corresponding job's artifacts haven't been fully cleaned up. Dirty entries are scheduled for cleanup by Flink. Once cleanup succeeds, the entry is removed.
+
+If cleanup fails repeatedly and exceeds the configured maximum retries, the job is left in a dirty state. You can use `high-availability.storageDir` to inspect and manually remove the artifacts.
+
+## Deployment-specific HA setup
+
+<CardGroup cols={3}>
+  <Card title="Standalone + ZooKeeper" icon="server" href="/deployment/ha/zookeeper">
+    Configure multiple JobManagers in conf/masters and point them at a ZooKeeper quorum.
+  </Card>
+  <Card title="YARN + ZooKeeper" icon="layer-group" href="/deployment/ha/zookeeper">
+    YARN handles JobManager container restarts; ZooKeeper or Kubernetes HA handles metadata persistence.
+  </Card>
+  <Card title="Native Kubernetes" icon="dharmachakra" href="/deployment/ha/kubernetes">
+    Use Kubernetes HA with multiple JobManager replicas configured via kubernetes.jobmanager.replicas.
+  </Card>
+</CardGroup>

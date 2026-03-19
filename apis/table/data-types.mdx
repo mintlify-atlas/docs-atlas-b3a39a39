@@ -1,0 +1,277 @@
+---
+title: "Data Types"
+description: "Reference for all Flink SQL data types: character strings, binary strings, numeric types, date and time types, complex types (ROW, ARRAY, MAP, MULTISET), and their Java and Python mappings."
+---
+
+Flink SQL has a rich set of native data types. A data type describes the logical type of a value in the table ecosystem and carries nullability information for efficient scalar expression handling.
+
+Examples:
+
+- `INT`
+- `INT NOT NULL`
+- `DECIMAL(10, 2)`
+- `TIMESTAMP(3) WITH LOCAL TIME ZONE`
+- `ROW<name STRING, score DOUBLE>`
+- `ARRAY<BIGINT>`
+
+## Using data types in Java
+
+In the Java/Scala Table API, data types are instances of `org.apache.flink.table.types.DataType`. All predefined types are available as static factory methods in `org.apache.flink.table.api.DataTypes`:
+
+```java
+import static org.apache.flink.table.api.DataTypes.*;
+
+// simple types
+DataType t1 = STRING();
+DataType t2 = INT();
+DataType t3 = DECIMAL(10, 2);
+DataType t4 = TIMESTAMP(3);
+
+// complex types
+DataType t5 = ARRAY(BIGINT());
+DataType t6 = MAP(STRING(), INT());
+DataType t7 = ROW(
+    FIELD("name",  STRING()),
+    FIELD("score", DOUBLE()),
+    FIELD("ts",    TIMESTAMP_LTZ(3))
+);
+
+// nullability
+DataType notNull = INT().notNull();
+DataType nullable = INT().nullable(); // nullable is the default
+```
+
+## Using data types in Python
+
+```python
+from pyflink.table.types import DataTypes
+
+t1 = DataTypes.STRING()
+t2 = DataTypes.INT()
+t3 = DataTypes.DECIMAL(10, 2)
+t4 = DataTypes.TIMESTAMP(3)
+t5 = DataTypes.ARRAY(DataTypes.BIGINT())
+t6 = DataTypes.MAP(DataTypes.STRING(), DataTypes.INT())
+t7 = DataTypes.ROW([
+    DataTypes.FIELD("name",  DataTypes.STRING()),
+    DataTypes.FIELD("score", DataTypes.DOUBLE()),
+])
+```
+
+## Supported types overview
+
+| SQL type | Java type (`DataTypes.*`) | Description |
+|---|---|---|
+| `CHAR(n)` | `CHAR(n)` | Fixed-length character string |
+| `VARCHAR(n)` / `STRING` | `VARCHAR(n)` / `STRING()` | Variable-length character string |
+| `BINARY(n)` | `BINARY(n)` | Fixed-length byte string |
+| `VARBINARY(n)` / `BYTES` | `VARBINARY(n)` / `BYTES()` | Variable-length byte string |
+| `BOOLEAN` | `BOOLEAN()` | True/false |
+| `TINYINT` | `TINYINT()` | 1-byte integer |
+| `SMALLINT` | `SMALLINT()` | 2-byte integer |
+| `INT` / `INTEGER` | `INT()` | 4-byte integer |
+| `BIGINT` | `BIGINT()` | 8-byte integer |
+| `FLOAT` | `FLOAT()` | 4-byte floating point |
+| `DOUBLE` | `DOUBLE()` | 8-byte floating point |
+| `DECIMAL(p, s)` | `DECIMAL(p, s)` | Fixed-precision decimal |
+| `DATE` | `DATE()` | Calendar date |
+| `TIME(p)` | `TIME(p)` | Time of day (precision 0 only) |
+| `TIMESTAMP(p)` | `TIMESTAMP(p)` | Date and time without time zone |
+| `TIMESTAMP_LTZ(p)` | `TIMESTAMP_LTZ(p)` | Date and time with local time zone |
+| `INTERVAL YEAR TO MONTH` | `INTERVAL(YEAR(), MONTH())` | Year-month interval |
+| `INTERVAL DAY TO SECOND` | `INTERVAL(DAY(), SECOND(3))` | Day-time interval |
+| `ARRAY<T>` | `ARRAY(T)` | Ordered sequence of elements |
+| `MAP<K, V>` | `MAP(K, V)` | Unordered key-value pairs |
+| `MULTISET<T>` | `MULTISET(T)` | Bag of values with duplicates |
+| `ROW<f1 T1, ...>` | `ROW(FIELD("f1", T1), ...)` | Structured record |
+| `RAW<C>` | `RAW(C, serializer)` | Opaque type for custom classes |
+
+## Character string types
+
+`CHAR(n)` stores exactly `n` code points, padding shorter values with spaces. `VARCHAR(n)` stores up to `n` code points without padding. `STRING` is a synonym for `VARCHAR(2147483647)`.
+
+```sql
+-- fixed-length, padded to 10 chars
+CREATE TABLE t (code CHAR(10));
+
+-- variable-length, up to 255 chars
+CREATE TABLE t (name VARCHAR(255));
+
+-- unlimited variable-length string
+CREATE TABLE t (description STRING);
+```
+
+## Numeric types
+
+### Exact integers
+
+```sql
+create_time TINYINT,   -- -128 to 127
+priority    SMALLINT,  -- -32768 to 32767
+user_id     INT,       -- ~-2.1B to 2.1B
+order_id    BIGINT     -- ~-9.2 quintillion to 9.2 quintillion
+```
+
+### Decimal
+
+`DECIMAL(p, s)` stores a number with exactly `p` total digits and `s` digits after the decimal point.
+
+```sql
+price    DECIMAL(10, 2),   -- e.g. 12345678.99
+tax_rate DECIMAL(5, 4)     -- e.g. 0.0825
+```
+
+### Floating point
+
+`FLOAT` is 4-byte IEEE 754. `DOUBLE` is 8-byte IEEE 754. Use `DECIMAL` when you need exact arithmetic.
+
+## Date and time types
+
+### TIMESTAMP vs. TIMESTAMP_LTZ
+
+`TIMESTAMP(p)` represents a date-time without any time zone information. `TIMESTAMP_LTZ(p)` represents an instant in time and is interpreted in the session's local time zone when displaying. Use `TIMESTAMP_LTZ` for event-time attributes in streaming jobs.
+
+```sql
+CREATE TABLE events (
+    id         BIGINT,
+    event_time TIMESTAMP_LTZ(3),
+    WATERMARK FOR event_time AS event_time - INTERVAL '5' SECOND
+) WITH (...);
+```
+
+### Processing-time attribute
+
+```sql
+CREATE TABLE clicks (
+    user_id  BIGINT,
+    url      STRING,
+    proc_time AS PROCTIME()  -- generated processing-time attribute
+) WITH (...);
+```
+
+### Date and time literals
+
+```sql
+SELECT
+    DATE '2024-03-01',
+    TIME '12:30:00',
+    TIMESTAMP '2024-03-01 12:30:00.123',
+    INTERVAL '7' DAY,
+    INTERVAL '3' MONTH
+FROM (VALUES (1)) AS t(dummy);
+```
+
+## Complex types
+
+### ARRAY
+
+```sql
+-- DDL
+tags ARRAY<STRING>
+
+-- literal
+SELECT ARRAY['red', 'green', 'blue'] AS colors;
+
+-- access element (1-based)
+SELECT colors[1] FROM t;
+```
+
+In Java:
+
+```java
+DataTypes.ARRAY(DataTypes.STRING())
+```
+
+### MAP
+
+```sql
+-- DDL
+attributes MAP<STRING, STRING>
+
+-- literal
+SELECT MAP['k1', 'v1', 'k2', 'v2'] AS attrs;
+
+-- access value by key
+SELECT attrs['k1'] FROM t;
+```
+
+### ROW
+
+`ROW` is an anonymous structured type. Fields are accessed by name or position.
+
+```sql
+-- DDL
+address ROW<street STRING, city STRING, zip CHAR(5)>
+
+-- literal
+SELECT ROW('123 Main St', 'Springfield', '01234') AS address;
+
+-- field access
+SELECT address.city FROM t;
+```
+
+In Java:
+
+```java
+DataTypes.ROW(
+    DataTypes.FIELD("street", DataTypes.STRING()),
+    DataTypes.FIELD("city",   DataTypes.STRING()),
+    DataTypes.FIELD("zip",    DataTypes.CHAR(5))
+)
+```
+
+## Nullability
+
+All types are nullable by default. Append `NOT NULL` to declare a non-null column:
+
+```sql
+CREATE TABLE t (
+    id   BIGINT NOT NULL,   -- never null; primary key candidate
+    name STRING             -- nullable by default
+);
+```
+
+In Java:
+
+```java
+DataTypes.BIGINT().notNull()
+DataTypes.STRING()           // nullable (default)
+```
+
+## Python and Java type mapping
+
+The table below shows how Flink data types map to Python and Pandas types when used in Python UDFs:
+
+| Flink SQL type | Python type | Pandas type |
+|---|---|---|
+| `BOOLEAN` | `bool` | `numpy.bool_` |
+| `TINYINT` | `int` | `numpy.int8` |
+| `SMALLINT` | `int` | `numpy.int16` |
+| `INT` | `int` | `numpy.int32` |
+| `BIGINT` | `int` | `numpy.int64` |
+| `FLOAT` | `float` | `numpy.float32` |
+| `DOUBLE` | `float` | `numpy.float64` |
+| `VARCHAR` / `STRING` | `str` | `str` |
+| `VARBINARY` / `BYTES` | `bytes` | `bytes` |
+| `DECIMAL` | `decimal.Decimal` | `decimal.Decimal` |
+| `DATE` | `datetime.date` | `datetime.date` |
+| `TIME` | `datetime.time` | `datetime.time` |
+| `TIMESTAMP` | `datetime.datetime` | `datetime.datetime` |
+| `TIMESTAMP_LTZ` | `datetime.datetime` | `datetime.datetime` |
+| `INTERVAL YEAR TO MONTH` | `int` | Not supported |
+| `INTERVAL DAY TO SECOND` | `datetime.timedelta` | Not supported |
+| `ARRAY` | `list` | `numpy.ndarray` |
+| `MAP` | `dict` | Not supported |
+| `ROW` | `pyflink.common.Row` | `dict` |
+
+## Physical hints
+
+Physical hints tell the runtime which JVM class to use when bridging between the table ecosystem and user code. They are only required when building custom connectors or sources/sinks:
+
+```java
+// use java.sql.Timestamp instead of the default java.time.LocalDateTime
+DataType t = DataTypes.TIMESTAMP(3).bridgedTo(java.sql.Timestamp.class);
+
+// use a primitive int[] instead of boxed Integer[]
+DataType t2 = DataTypes.ARRAY(DataTypes.INT().notNull()).bridgedTo(int[].class);
+```

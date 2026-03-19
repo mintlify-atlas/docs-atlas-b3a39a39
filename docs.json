@@ -1,122 +1,213 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Apache Flink",
+  "theme": "linden",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#d9686e",
+    "light": "#be79d9",
+    "dark": "#23171b"
   },
-  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "https://media.brand.dev/8b46510e-f698-4e83-9092-2a4885cc8b6a.png",
+    "dark": "https://media.brand.dev/b3481cf1-7b7d-47dc-9f95-f0551a257230.png"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/apache/flink"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/apache/flink"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Get Started",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Introduction",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "get-started/overview",
+              "get-started/local-installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Quickstarts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "get-started/datastream-quickstart",
+              "get-started/table-api-quickstart",
+              "get-started/sql-quickstart"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
-            ]
-          },
-          {
-            "group": "AI tools",
-            "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "concepts/flink-architecture",
+              "concepts/stateful-stream-processing",
+              "concepts/time",
+              "concepts/glossary"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "APIs",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "DataStream API",
             "pages": [
-              "api-reference/introduction"
+              "apis/datastream/overview",
+              "apis/datastream/execution-mode",
+              "apis/datastream/sources",
+              "apis/datastream/sinks",
+              "apis/datastream/operators",
+              "apis/datastream/event-time",
+              "apis/datastream/fault-tolerance",
+              "apis/datastream/state",
+              "apis/datastream/side-output",
+              "apis/datastream/testing"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Table API & SQL",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "apis/table/overview",
+              "apis/table/table-environment",
+              "apis/table/table-api",
+              "apis/table/catalogs",
+              "apis/table/functions",
+              "apis/table/data-types",
+              "apis/table/sql-client",
+              "apis/table/sql-gateway"
+            ]
+          },
+          {
+            "group": "Python API (PyFlink)",
+            "pages": [
+              "apis/python/overview",
+              "apis/python/execution-mode",
+              "apis/python/dependency-management",
+              "apis/python/connectors",
+              "apis/python/metrics",
+              "apis/python/debugging",
+              "apis/python/faq"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Deployment",
+        "groups": [
+          {
+            "group": "Setup",
+            "pages": [
+              "deployment/overview",
+              "deployment/configuration",
+              "deployment/cli"
+            ]
+          },
+          {
+            "group": "Resource Providers",
+            "pages": [
+              "deployment/resource-providers/standalone",
+              "deployment/resource-providers/yarn",
+              "deployment/resource-providers/kubernetes"
+            ]
+          },
+          {
+            "group": "High Availability",
+            "pages": [
+              "deployment/ha/overview",
+              "deployment/ha/zookeeper",
+              "deployment/ha/kubernetes"
+            ]
+          },
+          {
+            "group": "Memory & Performance",
+            "pages": [
+              "deployment/memory/overview",
+              "deployment/elastic-scaling",
+              "deployment/adaptive-batch",
+              "deployment/speculative-execution"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "deployment/security/ssl",
+              "deployment/security/kerberos"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Operations",
+        "groups": [
+          {
+            "group": "State Management",
+            "pages": [
+              "ops/state/checkpoints",
+              "ops/state/savepoints",
+              "ops/state/state-backends",
+              "ops/state/task-failure-recovery",
+              "ops/state/large-state-tuning"
+            ]
+          },
+          {
+            "group": "Monitoring",
+            "pages": [
+              "ops/metrics",
+              "ops/rest-api",
+              "ops/monitoring/logging",
+              "ops/production-ready"
+            ]
+          },
+          {
+            "group": "Debugging",
+            "pages": [
+              "ops/debugging/application-profiling",
+              "ops/debugging/flame-graphs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Connectors",
+        "groups": [
+          {
+            "group": "DataStream Connectors",
+            "pages": [
+              "connectors/datastream/overview",
+              "connectors/datastream/filesystem",
+              "connectors/datastream/datagen",
+              "connectors/datastream/hybrid-source"
+            ]
+          },
+          {
+            "group": "Table / SQL Connectors",
+            "pages": [
+              "connectors/table/overview",
+              "connectors/table/kafka",
+              "connectors/table/filesystem",
+              "connectors/table/jdbc"
+            ]
+          },
+          {
+            "group": "Formats",
+            "pages": [
+              "connectors/formats/overview",
+              "connectors/formats/avro",
+              "connectors/formats/json",
+              "connectors/formats/parquet",
+              "connectors/formats/orc"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

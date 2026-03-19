@@ -1,0 +1,203 @@
+---
+title: "Flink Architecture"
+description: "Learn how Flink's distributed runtime is organized — from the JobManager and TaskManagers that form every cluster, to operator chains, task slots, and deployment modes on YARN, Kubernetes, and standalone setups."
+---
+
+Flink is a distributed system that requires effective allocation and management of compute resources to execute streaming applications. It integrates with common cluster resource managers such as [Hadoop YARN](https://hadoop.apache.org/docs/stable/hadoop-yarn/hadoop-yarn-site/YARN.html) and [Kubernetes](https://kubernetes.io/), but can also run as a standalone cluster or even as an embedded library.
+
+## Anatomy of a Flink cluster
+
+Every Flink runtime consists of two types of processes: one **JobManager** and one or more **TaskManagers**.
+
+```
+┌─────────────────────────────────────────────────┐
+│                   JobManager                    │
+│  ┌─────────────┐ ┌──────────┐ ┌─────────────┐  │
+│  │ResourceMgr  │ │Dispatcher│ │  JobMaster  │  │
+│  └─────────────┘ └──────────┘ └─────────────┘  │
+└─────────────────────────┬───────────────────────┘
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+   ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+   │TaskManager 1│ │TaskManager 2│ │TaskManager 3│
+   │  [slot][slot│ │  [slot][slot│ │  [slot][slot│
+   └─────────────┘ └─────────────┘ └─────────────┘
+```
+
+The **Client** is not part of the runtime itself. It prepares and submits a dataflow to the JobManager, then either disconnects (_detached mode_) or stays connected to receive progress reports (_attached mode_). The client runs either as part of the Java program triggering execution, or through the command line: `./bin/flink run ...`.
+
+The JobManager and TaskManagers can start in various ways: directly on machines as a standalone cluster, in containers, or managed by resource frameworks like YARN or Kubernetes. TaskManagers connect to the JobManager, announce themselves as available, and are assigned work.
+
+### JobManager
+
+The JobManager coordinates the distributed execution of Flink applications. Its responsibilities include scheduling tasks, reacting to finished tasks or failures, coordinating checkpoints, and orchestrating recovery. It contains three distinct components:
+
+<AccordionGroup>
+  <Accordion title="ResourceManager">
+    The ResourceManager handles resource de-allocation, allocation, and provisioning in a Flink cluster. It manages **task slots** — the unit of resource scheduling in Flink.
+
+    Flink ships multiple ResourceManager implementations for different environments:
+    - **YARN ResourceManager**: requests and releases containers from YARN
+    - **Kubernetes ResourceManager**: starts and stops TaskManager pods
+    - **Standalone ResourceManager**: distributes slots of already-running TaskManagers; cannot start new ones on its own
+  </Accordion>
+  <Accordion title="Dispatcher">
+    The Dispatcher provides a **REST interface** for submitting Flink applications for execution. When a job is submitted, it starts a new JobMaster for that job. It also runs the **Flink Web UI**, which provides information about job execution, task status, metrics, and logs.
+  </Accordion>
+  <Accordion title="JobMaster">
+    A JobMaster is responsible for managing the execution of a single [JobGraph](/concepts/glossary) (the logical representation of a job). Multiple jobs can run simultaneously in a Flink cluster, each with its own JobMaster.
+
+    In a high-availability setup, you can run multiple JobManagers: one acts as the **leader** and the others are on **standby**, ready to take over if the leader fails.
+  </Accordion>
+</AccordionGroup>
+
+### TaskManagers
+
+TaskManagers (also called *workers*) execute the tasks of a dataflow and handle buffering and exchange of data streams between tasks.
+
+There must always be at least one TaskManager. Each TaskManager runs as a **JVM process** and may execute one or more subtasks in separate threads. The smallest unit of resource scheduling within a TaskManager is a **task slot**.
+
+## Tasks and operator chains
+
+For distributed execution, Flink *chains* operator subtasks together into *tasks*. Each task is executed by one thread.
+
+Chaining operators into tasks is a key optimization:
+- Reduces thread-to-thread handover overhead
+- Eliminates intermediate buffering between chained operators
+- Increases overall throughput
+- Decreases end-to-end latency
+
+Consider a pipeline with a source, a `map`, a `keyBy`, a `window`, and a sink. Flink may chain the source and the `map` into a single task since they can share a thread without requiring repartitioning between them:
+
+```
+[Source → map()] →  [keyBy/window] →  [sink]
+   Task 1               Task 2         Task 3
+  (1 thread)           (1 thread)     (1 thread)
+```
+
+The `keyBy` operator forces a network shuffle (repartitioning), which breaks the chain. Operators on either side of a shuffle boundary cannot be in the same chain.
+
+<Tip>
+  You can control chaining behavior explicitly using `.startNewChain()`, `.disableChaining()`, or by setting slot-sharing groups in the DataStream API.
+</Tip>
+
+## Task slots and resources
+
+Each task slot represents a **fixed subset of resources** of the TaskManager. A TaskManager with three slots, for example, dedicates 1/3 of its managed memory to each slot.
+
+<Note>
+  Slots currently only separate **managed memory** between tasks. There is no CPU isolation — all slots on a TaskManager share the same CPU cores.
+</Note>
+
+By adjusting the number of task slots, you control how subtasks are isolated:
+
+| Configuration | Behavior |
+|---|---|
+| 1 slot per TaskManager | Each task group runs in a separate JVM — maximum isolation |
+| Multiple slots per TaskManager | Subtasks share the JVM, TCP connections, heartbeats, and data structures — lower overhead |
+
+### Slot sharing
+
+By default, Flink allows subtasks from **different operators of the same job** to share a single slot. This means one slot can hold an entire pipeline of the job.
+
+Slot sharing provides two benefits:
+
+1. **Simpler capacity planning**: A Flink cluster only needs as many task slots as the highest parallelism used in the job. You don't need to count all tasks individually.
+2. **Better resource utilization**: Without slot sharing, lightweight operators like `source/map()` would block as many slots as heavyweight operators like `window`. With slot sharing, resource-intensive and resource-light subtasks co-locate in the same slot, achieving better balance across TaskManagers.
+
+```
+ Without slot sharing:          With slot sharing:
+
+  [source]  [source]           [source→map→window]
+  [map   ]  [map   ]           [source→map→window]
+  [window]  [window]           ← 2 slots hold full pipeline
+  ← 6 slots needed             ← same parallelism, fewer slots
+```
+
+## Flink application execution
+
+A Flink Application is any user program that spawns one or more Flink jobs from its `main()` method. The jobs can execute in:
+
+- A local JVM via `LocalEnvironment` (for development and testing)
+- A remote cluster via `RemoteEnvironment`
+
+The `ExecutionEnvironment` (or `StreamExecutionEnvironment`) provides methods to control job execution such as setting parallelism, configuring state backends, and enabling checkpointing.
+
+### Cluster deployment modes
+
+Flink offers three distinct deployment modes, each with different lifecycle and isolation guarantees:
+
+<AccordionGroup>
+  <Accordion title="Flink Application Cluster">
+    **Lifecycle**: Dedicated to a single Flink Application. The `main()` method runs on the cluster itself (not the client), and the cluster shuts down when the application finishes. This is a one-step deployment: you package your application logic and dependencies into an executable JAR, and the `ApplicationClusterEntryPoint` calls `main()` to extract the JobGraph.
+
+    **Resource isolation**: The ResourceManager and Dispatcher are scoped to a single application, which provides strong separation of concerns.
+
+    **Best for**: Production deployments on Kubernetes where you want a clean, per-application lifecycle — similar to any other containerized application.
+
+    ```bash
+    # Deploy as application cluster on Kubernetes
+    ./bin/flink run-application \
+      --target kubernetes-application \
+      -Dkubernetes.cluster-id=my-app-cluster \
+      ./my-flink-job.jar
+    ```
+  </Accordion>
+  <Accordion title="Flink Session Cluster">
+    **Lifecycle**: A long-running cluster that accepts multiple job submissions. The cluster keeps running even after all jobs finish — it lives until you manually stop it.
+
+    **Resource isolation**: All jobs share the same cluster. TaskManager slots are allocated on job submission and released when the job finishes. If a TaskManager crashes, all jobs with tasks on that TaskManager fail.
+
+    **Best for**: Interactive analysis or scenarios where job startup time must be minimized, since you avoid spinning up a new cluster per job.
+
+    ```bash
+    # Submit to an existing session cluster
+    ./bin/flink run \
+      --jobmanager localhost:8081 \
+      ./my-flink-job.jar
+    ```
+  </Accordion>
+  <Accordion title="Standalone cluster">
+    **Lifecycle**: You manually start and manage the JobManager and TaskManager processes. Flink does not interact with any external resource manager.
+
+    **Best for**: Simple setups, on-premise environments, or when you want full control over process placement.
+
+    ```bash
+    # Start a standalone cluster
+    ./bin/start-cluster.sh
+
+    # Stop it
+    ./bin/stop-cluster.sh
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### YARN deployment
+
+When running on YARN, Flink requests containers from the YARN ResourceManager. The Flink ResourceManager communicates with YARN to provision TaskManager containers on demand.
+
+```bash
+# Submit a Flink job to YARN in per-job mode
+./bin/flink run \
+  --target yarn-per-job \
+  -Djobmanager.memory.process.size=1024m \
+  -Dtaskmanager.memory.process.size=2048m \
+  ./my-flink-job.jar
+```
+
+### Kubernetes deployment
+
+Flink's native Kubernetes integration allows Flink to directly communicate with the Kubernetes API server to manage TaskManager pods. This enables dynamic scaling and full lifecycle management without an intermediary resource manager.
+
+```bash
+# Start a Flink session cluster on Kubernetes
+./bin/kubernetes-session.sh \
+  -Dkubernetes.cluster-id=my-flink-cluster \
+  -Dkubernetes.container.image=flink:latest \
+  -Dtaskmanager.numberOfTaskSlots=2
+```
+
+<Info>
+  For high-availability setups, Flink can run multiple JobManagers where one is the elected leader and others are on standby. ZooKeeper or Kubernetes leader election is used to coordinate which JobManager is active.
+</Info>

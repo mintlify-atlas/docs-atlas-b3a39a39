@@ -1,0 +1,231 @@
+---
+title: "Standalone Cluster"
+description: "Deploy Apache Flink as standalone JVM processes on bare metal or virtual machines, with Session mode and Application mode examples."
+---
+
+Standalone mode is the most direct way to run Flink: the JobManager and TaskManagers are launched as plain JVM processes on operating system nodes. There is no external resource manager — you are responsible for starting, stopping, and replacing processes.
+
+## Prerequisites
+
+- Java 8 or higher installed on all nodes.
+- A recent Flink distribution downloaded and unpacked from the [Apache Flink downloads page](https://flink.apache.org/downloads/).
+- For multi-node clusters: passwordless SSH access between nodes sharing the same Flink directory structure.
+
+## Starting a local session cluster
+
+The fastest way to get started is a single-machine session cluster:
+
+<Steps>
+  <Step title="Start the cluster">
+    ```bash
+    ./bin/start-cluster.sh
+    ```
+    This starts one JobManager JVM and one TaskManager JVM. The Flink Web UI is available at [http://localhost:8081](http://localhost:8081).
+  </Step>
+  <Step title="Submit a job">
+    ```bash
+    ./bin/flink run ./examples/streaming/TopSpeedWindowing.jar
+    ```
+  </Step>
+  <Step title="Stop the cluster">
+    ```bash
+    ./bin/stop-cluster.sh
+    ```
+  </Step>
+</Steps>
+
+## Deployment modes
+
+### Session mode
+
+In Session mode the cluster runs independently from any individual job. You submit multiple jobs to the same running cluster:
+
+```bash
+# Start cluster
+./bin/start-cluster.sh
+
+# Submit first job
+./bin/flink run ./examples/streaming/TopSpeedWindowing.jar
+
+# Submit second job to the same cluster
+./bin/flink run ./examples/batch/WordCount.jar
+```
+
+### Application mode
+
+In Application mode, one JobManager is dedicated to a single application. The application's `main()` method runs on the JobManager itself.
+
+<Steps>
+  <Step title="Place your JAR in the lib directory">
+    ```bash
+    cp ./examples/streaming/TopSpeedWindowing.jar lib/
+    ```
+  </Step>
+  <Step title="Start the application-mode JobManager">
+    ```bash
+    ./bin/standalone-job.sh start \
+        --job-classname org.apache.flink.streaming.examples.windowing.TopSpeedWindowing
+    ```
+    The Web UI is available at [http://localhost:8081](http://localhost:8081).
+  </Step>
+  <Step title="Start one or more TaskManagers">
+    ```bash
+    ./bin/taskmanager.sh start
+    # Start additional TaskManagers if the job needs more parallelism
+    ./bin/taskmanager.sh start
+    ```
+  </Step>
+  <Step title="Stop when done">
+    ```bash
+    ./bin/taskmanager.sh stop
+    ./bin/standalone-job.sh stop
+    ```
+  </Step>
+</Steps>
+
+You can also use artifact fetching instead of copying JARs to `lib/`:
+
+```bash
+./bin/standalone-job.sh start \
+    -D user.artifacts.base-dir=/tmp/flink-artifacts \
+    --jars local:///path/to/TopSpeedWindowing.jar
+```
+
+## Distributed cluster setup
+
+For a multi-machine cluster, configure which hosts run which components.
+
+### Configuring masters and workers
+
+Edit `conf/masters` to list JobManager hosts:
+
+```
+master1
+```
+
+Edit `conf/workers` to list TaskManager hosts:
+
+```
+worker1
+worker2
+worker3
+```
+
+Set `jobmanager.rpc.address` in `conf/config.yaml` to the master hostname:
+
+```yaml
+jobmanager.rpc.address: master1
+```
+
+Then start the distributed cluster:
+
+```bash
+./bin/start-cluster.sh
+```
+
+The script uses SSH to start Flink processes on each listed host.
+
+### Local multi-process example
+
+To simulate a cluster on one machine (useful for testing), list `localhost` multiple times in `conf/workers`:
+
+```
+localhost
+localhost
+```
+
+This starts two TaskManagers on the same machine.
+
+## Managing components individually
+
+You can start and stop individual components without using `start-cluster.sh`:
+
+```bash
+# Start/stop JobManager
+./bin/jobmanager.sh start
+./bin/jobmanager.sh stop
+
+# Start/stop TaskManager (call multiple times for multiple instances)
+./bin/taskmanager.sh start
+./bin/taskmanager.sh stop
+
+# Stop all running TaskManager instances at once
+./bin/taskmanager.sh stop-all
+```
+
+To run a component in the foreground (useful in Docker):
+
+```bash
+./bin/jobmanager.sh start-foreground
+```
+
+## Dynamic properties
+
+The component scripts accept dynamic configuration overrides via `-D`:
+
+```bash
+./bin/jobmanager.sh start \
+    -D jobmanager.rpc.address=192.168.1.10 \
+    -D rest.port=8082
+```
+
+Dynamic properties override values in `conf/config.yaml`.
+
+## User JARs and classpath
+
+| Mode | User JAR recognition |
+|---|---|
+| Session mode | JAR file specified in the `flink run` command |
+| Application mode | JAR specified in the startup command, plus all JARs in `$FLINK_HOME/usrlib/` |
+
+## Setting up high availability
+
+Standalone HA requires ZooKeeper. Configure it in `conf/config.yaml` and list multiple JobManagers in `conf/masters`:
+
+```yaml
+high-availability.type: zookeeper
+high-availability.zookeeper.quorum: localhost:2181
+high-availability.zookeeper.path.root: /flink
+high-availability.cluster-id: /cluster_one
+high-availability.storageDir: hdfs:///flink/recovery
+```
+
+`conf/masters`:
+
+```
+localhost:8081
+localhost:8082
+```
+
+<Steps>
+  <Step title="Start ZooKeeper">
+    ```bash
+    ./bin/start-zookeeper-quorum.sh
+    ```
+  </Step>
+  <Step title="Start the HA cluster">
+    ```bash
+    ./bin/start-cluster.sh
+    # Output confirms two JobManagers started:
+    # Starting HA cluster with 2 masters and 1 peers in ZooKeeper quorum.
+    ```
+  </Step>
+  <Step title="Stop the cluster and ZooKeeper">
+    ```bash
+    ./bin/stop-cluster.sh
+    ./bin/stop-zookeeper-quorum.sh
+    ```
+  </Step>
+</Steps>
+
+## Logs and debugging
+
+Log files are written to the `logs/` directory. Each service writes a `.log` file. Log files rotate on each service restart; older runs have a numeric suffix.
+
+To enable DEBUG logging, edit `conf/log4j.properties`:
+
+```properties
+rootLogger.level = DEBUG
+```
+
+Logs are also available through the Web UI for both the JobManager and individual TaskManagers.

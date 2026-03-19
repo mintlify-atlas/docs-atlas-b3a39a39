@@ -1,0 +1,84 @@
+---
+title: "Table API & SQL Overview"
+description: "Introduction to Apache Flink's Table API and SQL: a unified relational API for stream and batch processing in Java, Scala, and Python."
+---
+
+Flink's Table API and SQL provide a unified, relational API for stream and batch processing. You can write queries once and run them on both bounded (batch) and unbounded (streaming) data without modification. The Table API is a language-integrated query API for Java, Scala, and Python, while Flink SQL lets you express the same logic as standard SQL strings.
+
+Both interfaces share the same underlying query planner and optimizer, so a query produces identical results regardless of whether it runs on a stream or a batch table.
+
+## What the Table API and SQL are
+
+The Table API and SQL are high-level abstractions built on top of Flink's DataStream API. They represent data as **dynamic tables**: tables that change over time as new records arrive. A SQL `SELECT` on a dynamic table produces a continuously updated result set, not a one-time snapshot.
+
+Flink SQL is based on [Apache Calcite](https://calcite.apache.org), which implements the SQL standard. Most ANSI SQL constructs are supported, including `SELECT`, `INSERT INTO`, `CREATE TABLE`, `GROUP BY`, window aggregations, `JOIN`, subqueries, and common table expressions (CTEs). Flink extends standard SQL with streaming-specific constructs such as time attributes, watermarks, and the `MATCH_RECOGNIZE` pattern matching clause.
+
+The Table API is a fluent, type-safe Java/Scala/Python DSL that composes the same relational operations programmatically:
+
+```java
+Table orders = tEnv.from("Orders");
+Table result = orders
+    .filter($("amount").isGreater(100))
+    .groupBy($("region"))
+    .select($("region"), $("amount").sum().as("total"));
+```
+
+## Relational vs. DataStream API
+
+The DataStream API gives you full control over state, timers, and per-record processing logic. The Table API and SQL trade that control for conciseness and automatic optimization:
+
+| | Table API & SQL | DataStream API |
+|---|---|---|
+| **Abstraction level** | Relational / declarative | Imperative / procedural |
+| **Optimization** | Automatic (Calcite planner) | Manual |
+| **Type safety** | Schema-based | Strongly typed streams |
+| **Best for** | ETL, analytics, aggregations | Complex event processing, custom state |
+
+You can freely mix both APIs. Convert a `Table` to a `DataStream` or wrap a `DataStream` as a `Table` to use the most appropriate abstraction for each part of your pipeline.
+
+## When to use each interface
+
+**Use the Table API when** you want type-safe, programmatic composition of relational queries in Java, Scala, or Python, and you need to mix SQL statements with DataStream operations in the same program.
+
+**Use Flink SQL when** you prefer pure SQL strings—for interactive exploration in the SQL Client, for integration with BI tools via the SQL Gateway, or for embedding SQL statements in your application using `executeSql()`.
+
+**Use the DataStream API directly when** you need fine-grained control over state backends, custom timers, side outputs, or processing-logic that is difficult to express relationally.
+
+## Flink SQL vs. ANSI SQL
+
+Flink SQL follows the SQL standard closely but has a few differences worth knowing:
+
+- **Streaming semantics**: `SELECT` on an unbounded table produces a continuous result stream, not a finite result set. Window functions (`TUMBLE`, `HOP`, `CUMULATE`) are required to bound aggregations on streams.
+- **Time attributes**: Columns of type `TIMESTAMP_LTZ` or `TIMESTAMP` can be declared as event-time or processing-time attributes using the `WATERMARK` clause in `CREATE TABLE`.
+- **Dynamic tables**: Tables are not static; they are updated continuously as data arrives.
+- **DDL extensions**: `CREATE TABLE` accepts a `WITH` clause for connector and format properties.
+
+<Note>
+Flink SQL does not support all SQL features. Notably, correlated subqueries have limited support in streaming mode, and `ORDER BY` on unbounded streams requires a time attribute.
+</Note>
+
+## Section overview
+
+<CardGroup cols={2}>
+  <Card title="Table Environment" icon="settings" href="/apis/table/table-environment">
+    Create and configure a `TableEnvironment`. Register tables, execute SQL statements, and manage catalogs.
+  </Card>
+  <Card title="Table API" icon="code" href="/apis/table/table-api">
+    Programmatic relational operators: `select`, `filter`, `groupBy`, `join`, `union`, and window aggregations.
+  </Card>
+  <Card title="Catalogs" icon="database" href="/apis/table/catalogs">
+    Manage metadata for databases, tables, views, and functions. Use `GenericInMemoryCatalog`, `HiveCatalog`, or build your own.
+  </Card>
+  <Card title="User-Defined Functions" icon="function-square" href="/apis/table/functions">
+    Extend Flink SQL with scalar functions, table functions, and aggregate functions written in Java or Python.
+  </Card>
+  <Card title="Data Types" icon="layers" href="/apis/table/data-types">
+    Reference for all Flink SQL data types: numeric, string, date/time, and complex types (`ROW`, `ARRAY`, `MAP`).
+  </Card>
+  <Card title="SQL Client" icon="terminal" href="/apis/table/sql-client">
+    Interactive CLI for running SQL queries without writing any Java or Scala code.
+  </Card>
+  <Card title="SQL Gateway" icon="server" href="/apis/table/sql-gateway">
+    REST service for submitting SQL from remote clients, BI tools, and application servers.
+  </Card>
+</CardGroup>

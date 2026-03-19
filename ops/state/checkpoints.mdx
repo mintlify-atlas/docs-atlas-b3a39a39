@@ -1,0 +1,167 @@
+---
+title: "Checkpoints"
+description: "How Flink checkpoints work, how to configure them, and how to recover from them."
+---
+
+Checkpoints make state in Flink fault tolerant by allowing state and the corresponding stream positions to be recovered, giving your application the same semantics as a failure-free execution. When a failure occurs, Flink restarts from the most recent completed checkpoint.
+
+Flink's checkpointing is based on the Chandy-Lamport distributed snapshot algorithm. Checkpoint barriers flow through the data stream from sources to sinks; when all operators have processed a barrier, a consistent snapshot of the entire job's state is written to durable storage.
+
+## Enabling checkpointing
+
+Checkpointing is disabled by default. Enable it by calling `enableCheckpointing` on the `StreamExecutionEnvironment`:
+
+```java
+StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+// Enable checkpointing every 60 seconds
+env.enableCheckpointing(60_000);
+```
+
+You can also configure checkpointing options on the `CheckpointConfig`:
+
+```java
+CheckpointConfig config = env.getCheckpointConfig();
+
+// Use exactly-once semantics (default)
+config.setCheckpointingConsistencyMode(CheckpointingMode.EXACTLY_ONCE);
+
+// Minimum 30 seconds between checkpoints
+config.setMinPauseBetweenCheckpoints(30_000);
+
+// Maximum of one checkpoint in progress at a time
+config.setMaxConcurrentCheckpoints(1);
+
+// Checkpoint must complete within 10 minutes or is aborted
+config.setCheckpointTimeout(600_000);
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `checkpointInterval` | (required) | How often to trigger a checkpoint, in milliseconds |
+| `checkpointingMode` | `EXACTLY_ONCE` | Consistency mode: `EXACTLY_ONCE` or `AT_LEAST_ONCE` |
+| `minPauseBetweenCheckpoints` | 0 | Minimum time between end of last checkpoint and start of next |
+| `maxConcurrentCheckpoints` | 1 | Maximum number of in-progress checkpoints |
+| `checkpointTimeout` | 600,000 ms | Time after which an in-progress checkpoint is aborted |
+
+<Tip>
+Set `minPauseBetweenCheckpoints` to prevent the system from spending too much time checkpointing when state is large and individual checkpoints take a long time. A value of 30–60 seconds works well for most production jobs.
+</Tip>
+
+## Checkpoint storage
+
+When checkpointing is enabled, state must be persisted somewhere. Flink provides two checkpoint storage options:
+
+<CardGroup cols={2}>
+  <Card title="JobManagerCheckpointStorage" icon="server">
+    Stores checkpoint snapshots in the JobManager's JVM heap. Suitable only for small state and local development.
+  </Card>
+  <Card title="FileSystemCheckpointStorage" icon="database">
+    Writes state snapshots to files on a distributed filesystem (HDFS, S3, GCS, etc.). Required for production.
+  </Card>
+</CardGroup>
+
+If you configure a checkpoint directory, Flink automatically uses `FileSystemCheckpointStorage`. Otherwise it falls back to `JobManagerCheckpointStorage`.
+
+### JobManagerCheckpointStorage
+
+The `JobManagerCheckpointStorage` stores checkpoint snapshots in the JobManager heap. It is limited to small state sizes and is not suitable for high-availability setups.
+
+Limitations:
+- Each individual state is limited to 5 MB by default (configurable in the constructor)
+- The aggregate state must fit in the JobManager's memory
+- State cannot be larger than the network frame size
+
+```java
+// Allow up to 10 MB of state in JobManager
+new JobManagerCheckpointStorage(10 * 1024 * 1024);
+```
+
+Use `JobManagerCheckpointStorage` for:
+- Local development and debugging
+- Jobs with very little state (e.g., only stateless operators or a Kafka consumer with no windowing)
+
+### FileSystemCheckpointStorage
+
+The `FileSystemCheckpointStorage` writes state snapshots into files on a configured filesystem. Only minimal metadata is kept in the JobManager's memory.
+
+<Tabs>
+  <Tab title="config.yaml">
+    ```yaml
+    execution.checkpointing.dir: hdfs://namenode:8020/flink/checkpoints
+    ```
+  </Tab>
+  <Tab title="Java (per-job)">
+    ```java
+    Configuration config = new Configuration();
+    config.set(CheckpointingOptions.CHECKPOINT_STORAGE, "filesystem");
+    config.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, "hdfs://namenode:8020/flink/checkpoints");
+    env.configure(config);
+    ```
+  </Tab>
+  <Tab title="Java (with write buffer)">
+    ```java
+    Configuration config = new Configuration();
+    config.set(CheckpointingOptions.CHECKPOINT_STORAGE, "filesystem");
+    config.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, "hdfs://namenode:8020/flink/checkpoints");
+    config.set(CheckpointingOptions.FS_WRITE_BUFFER_SIZE, 4096);
+    env.configure(config);
+    ```
+  </Tab>
+</Tabs>
+
+Use `FileSystemCheckpointStorage` for:
+- All production deployments
+- All high-availability setups
+- Any job where state must survive JobManager restarts
+
+## Checkpoint directory structure
+
+Flink organises checkpoint data under the configured directory as follows:
+
+```
+/user-defined-checkpoint-dir
+    /{job-id}/
+        shared/        # State shared across multiple checkpoints (RocksDB SST files)
+        taskowned/     # State that must never be dropped by the JobManager
+        chk-1/         # Checkpoint 1 data
+        chk-2/         # Checkpoint 2 data
+        chk-3/
+        ...
+```
+
+<Warning>
+The checkpoint directory layout is not a public API and may change between Flink releases.
+</Warning>
+
+## Retained checkpoints
+
+By default, checkpoints are deleted when a job is cancelled. You can configure checkpoints to be retained so that you can restart a job from them later:
+
+```java
+CheckpointConfig config = env.getCheckpointConfig();
+config.setExternalizedCheckpointRetention(
+    ExternalizedCheckpointRetention.RETAIN_ON_CANCELLATION
+);
+```
+
+The two retention modes are:
+
+| Mode | Behaviour |
+|------|-----------|
+| `RETAIN_ON_CANCELLATION` | Checkpoint is kept when the job is cancelled. You must clean it up manually. |
+| `DELETE_ON_CANCELLATION` | Checkpoint is deleted when the job is cancelled. It remains available only if the job fails. |
+
+## Restoring from a checkpoint
+
+You can restart a job from a retained checkpoint using the Flink CLI, exactly as you would with a savepoint:
+
+```bash
+$ bin/flink run -s :checkpointMetaDataPath [:runArgs]
+```
+
+The `:checkpointMetaDataPath` is the path to the `_metadata` file inside the checkpoint directory. The JobManager must be able to access all data files referenced by this metadata file.
+
+<Note>
+Checkpoints are not self-contained in the same way savepoints are. If you move checkpoint data, the JobManager must still be able to read all referenced files from their original paths. For a fully portable snapshot, use a savepoint instead.
+</Note>

@@ -1,0 +1,167 @@
+---
+title: "Flink Overview"
+description: "Apache Flink is a unified stream and batch processing engine built for high throughput, low latency, exactly-once semantics, and event-time processing at scale."
+---
+
+Apache Flink is an open-source, distributed stream processing framework. It can process both unbounded streams (real-time data) and bounded streams (batch data) using the same APIs and runtime, eliminating the need to maintain separate systems for streaming and batch workloads.
+
+## What is Apache Flink?
+
+Flink is built around the principle that *streaming is the more general model*: a batch job is just a stream with a defined beginning and end. This design gives you a single engine capable of:
+
+- **Real-time event processing** — react to data as it arrives with millisecond latency
+- **Large-scale batch analytics** — process petabytes of historical data with high throughput
+- **Stateful computations** — maintain per-key state across millions of events with fault tolerance
+- **Complex event-time logic** — handle late and out-of-order data correctly
+
+## Core value propositions
+
+### High throughput and low latency
+
+Flink achieves millions of events per second per node through pipelined execution, operator chaining, and custom off-heap memory management. Operators are chained into tasks that run in a single thread, eliminating serialization and buffering overhead between operators in the same chain.
+
+### Exactly-once processing guarantees
+
+Flink uses distributed snapshots (based on the Chandy-Lamport algorithm) to implement fault-tolerant, exactly-once state consistency. Checkpoints are taken asynchronously so they do not interrupt processing. When a failure occurs, Flink restores application state from the latest checkpoint and replays events from the source.
+
+### Event-time processing
+
+Flink distinguishes between *event time* (when an event actually occurred) and *processing time* (when Flink processes it). Event-time processing allows Flink to produce correct, deterministic results even when events arrive late or out of order. Watermarks communicate progress in event time, allowing windows to close and results to be emitted at the right moment.
+
+### Stateful stream processing
+
+Flink provides managed, fault-tolerant keyed state that scales to terabytes. State is partitioned by key and co-located with the processing logic, so state lookups are local and fast. Flink supports `ValueState`, `ListState`, `MapState`, `ReducingState`, and `AggregatingState`, all accessible through a consistent API.
+
+## Flink's API stack
+
+Flink offers four levels of abstraction, from low-level control to high-level SQL:
+
+```
+        ┌──────────────────────────────┐
+        │         SQL / Table API      │  ← Highest level: declarative
+        ├──────────────────────────────┤
+        │         DataStream API       │  ← Core API: Java/Python
+        ├──────────────────────────────┤
+        │       ProcessFunction        │  ← Low-level: timers, state
+        └──────────────────────────────┘
+```
+
+### DataStream API
+
+The DataStream API is the core API for building stateful stream processing applications. It gives you explicit control over state, time, and custom processing logic. You work directly with `DataStream<T>` objects and apply transformations like `map`, `flatMap`, `keyBy`, `window`, and `process`.
+
+```java
+StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+DataStream<String> lines = env.socketTextStream("localhost", 9999);
+DataStream<WordWithCount> wordCounts = lines
+    .flatMap((String line, Collector<WordWithCount> out) ->
+        Arrays.stream(line.split("\\s+")).forEach(w -> out.collect(new WordWithCount(w, 1))))
+    .keyBy(wc -> wc.word)
+    .sum("count");
+
+wordCounts.print();
+env.execute("Word Count");
+```
+
+The DataStream API supports both Java and Python (via PyFlink).
+
+### Table API
+
+The Table API is a relational, declarative API centered around `Table` objects. You express queries using a fluent, SQL-inspired DSL rather than writing imperative transformation logic. The same query runs on both streaming and batch data with identical semantics.
+
+```java
+EnvironmentSettings settings = EnvironmentSettings.inStreamingMode();
+TableEnvironment tEnv = TableEnvironment.create(settings);
+
+Table orders = tEnv.from("orders");
+Table revenue = orders
+    .filter($( "amount").isGreater(0))
+    .groupBy($( "customerId"))
+    .select($( "customerId"), $("amount").sum().as("total"));
+
+revenue.execute().print();
+```
+
+### SQL
+
+Flink SQL is ANSI SQL 2011 compliant and executes over both bounded and unbounded tables. You can write `CREATE TABLE`, `SELECT`, `INSERT INTO`, and other DDL/DML statements. The SQL interface is available through the SQL Client CLI or programmatically via `TableEnvironment.executeSql()`.
+
+```sql
+CREATE TABLE orders (
+    order_id  BIGINT,
+    customer  STRING,
+    amount    DECIMAL(10, 2),
+    order_ts  TIMESTAMP(3),
+    WATERMARK FOR order_ts AS order_ts - INTERVAL '5' SECOND
+) WITH (
+    'connector' = 'kafka',
+    'topic'     = 'orders',
+    'format'    = 'json'
+);
+
+SELECT
+    TUMBLE_START(order_ts, INTERVAL '1' HOUR) AS window_start,
+    customer,
+    SUM(amount) AS total_spend
+FROM orders
+GROUP BY TUMBLE(order_ts, INTERVAL '1' HOUR), customer;
+```
+
+### PyFlink
+
+PyFlink provides Python bindings for both the DataStream API and the Table API. You can write Python UDFs (user-defined functions) that integrate with Java-based pipelines, and submit jobs to any Flink cluster.
+
+```bash
+python -m pip install apache-flink
+```
+
+## Deployment options
+
+Flink is a distributed system that requires a cluster to run production workloads. It integrates with common cluster resource managers and can also run standalone.
+
+<CardGroup cols={3}>
+  <Card title="Standalone" icon="server">
+    Run a Flink cluster directly on bare metal or VMs. Start a JobManager and one or more TaskManagers with `./bin/start-cluster.sh`. Suitable for on-premise deployments and development.
+  </Card>
+  <Card title="Kubernetes" icon="cloud">
+    Deploy Flink on Kubernetes using the native Kubernetes integration or the Flink Kubernetes Operator. Supports Application Mode and Session Mode. Recommended for cloud-native deployments.
+  </Card>
+  <Card title="Apache YARN" icon="box">
+    Submit Flink jobs to an existing Hadoop YARN cluster. Flink requests containers from YARN's ResourceManager and releases them when the job finishes.
+  </Card>
+</CardGroup>
+
+### Cluster modes
+
+| Mode | Description | Use case |
+|------|-------------|----------|
+| **Session Mode** | Long-running cluster that accepts multiple job submissions | Interactive workloads, development |
+| **Application Mode** | Cluster is created per application; `main()` runs on the cluster | Production, resource isolation |
+| **Per-Job Mode (deprecated)** | One cluster per job, client-side `main()` | Replaced by Application Mode |
+
+## Flink cluster architecture
+
+A Flink cluster consists of two types of processes:
+
+- **JobManager** — coordinates distributed execution, schedules tasks, manages checkpoints, and recovers from failures. Internally it consists of a Dispatcher (REST API + Web UI), a JobMaster (per-job execution management), and a ResourceManager (slot allocation).
+- **TaskManagers** — execute the actual dataflow tasks. Each TaskManager offers a fixed number of *task slots*, which are the unit of resource scheduling. Multiple operators can share a slot through operator chaining.
+
+## What's next
+
+Start with a hands-on tutorial to understand how Flink works in practice:
+
+<CardGroup cols={2}>
+  <Card title="Local Installation" icon="download" href="/get-started/local-installation">
+    Download Flink, start a local cluster, and run your first job.
+  </Card>
+  <Card title="DataStream API Quickstart" icon="code" href="/get-started/datastream-quickstart">
+    Build a stateful fraud detection application with Java or Python.
+  </Card>
+  <Card title="Table API Quickstart" icon="table" href="/get-started/table-api-quickstart">
+    Build a streaming spend report using the relational Table API.
+  </Card>
+  <Card title="SQL Quickstart" icon="database" href="/get-started/sql-quickstart">
+    Run continuous SQL queries against streaming data in the SQL Client.
+  </Card>
+</CardGroup>

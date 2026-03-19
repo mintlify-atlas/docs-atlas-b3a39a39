@@ -1,0 +1,216 @@
+---
+title: "Glossary"
+description: "Definitions for core Apache Flink terms — from streams and operators to checkpoints, savepoints, watermarks, task slots, and more."
+---
+
+This glossary defines the core terms used throughout the Apache Flink documentation. Terms are listed alphabetically.
+
+<AccordionGroup>
+  <Accordion title="Checkpoint">
+    A checkpoint is a consistent snapshot of the distributed state of a running Flink job at a specific point in time. Checkpoints are taken automatically by Flink at a configured interval and are used for **automatic fault recovery**: if a job fails, Flink restores all operator states to the latest successful checkpoint and replays input records from the corresponding source positions.
+
+    Checkpoints expire automatically when newer checkpoints complete (unless configured to retain them). They are not intended to survive job upgrades or operator graph changes. See also: **Savepoint**.
+  </Accordion>
+  <Accordion title="Checkpoint Storage">
+    The location where the state backend writes its snapshot data during a checkpoint. Options include:
+    - **JobManager heap**: for development and testing with small state
+    - **Filesystem** (HDFS, S3, GCS, etc.): for production use; provides durability and large capacity
+
+    Checkpoint storage is configured separately from the state backend.
+  </Accordion>
+  <Accordion title="Event">
+    An event is a statement about a change of the state of the domain being modelled by the application. Events can be input and/or output of a stream or batch processing application. Events are a special kind of **record** — specifically records that carry a timestamp representing when the state change occurred.
+  </Accordion>
+  <Accordion title="ExecutionGraph">
+    See **Physical Graph**.
+  </Accordion>
+  <Accordion title="Flink Application">
+    A Flink Application is a Java (or Scala, Python) program that submits one or more **Flink Jobs** from its `main()` method by calling `execute()` on an execution environment.
+
+    The jobs of a Flink Application can be submitted to:
+    - A long-running **Flink Session Cluster**
+    - A dedicated **Flink Application Cluster**
+    - A **Flink Job Cluster** (deprecated since Flink 1.15)
+  </Accordion>
+  <Accordion title="Flink Application Cluster">
+    A dedicated **Flink Cluster** that only executes jobs from one Flink Application. The `main()` method runs on the cluster rather than the client. The cluster's lifetime is bound to the lifetime of the Flink Application — when the application finishes, the cluster shuts down.
+
+    This mode provides strong resource isolation since the ResourceManager and Dispatcher are scoped to a single application. It is the recommended deployment mode on Kubernetes.
+  </Accordion>
+  <Accordion title="Flink Cluster">
+    A distributed system consisting of one **JobManager** and one or more **TaskManager** processes. The Flink Cluster is the runtime environment in which Flink Jobs are executed.
+  </Accordion>
+  <Accordion title="Flink Job">
+    A Flink Job is the runtime representation of a **Logical Graph** (also called a dataflow graph) created and submitted by calling `execute()` in a Flink Application. Each job has a unique Job ID assigned at submission time.
+  </Accordion>
+  <Accordion title="Flink Job Cluster (deprecated)">
+    A dedicated Flink Cluster that only executes a single Flink Job. The cluster's lifetime is bound to the lifetime of the Flink Job. This deployment mode was deprecated in Flink 1.15.
+  </Accordion>
+  <Accordion title="Flink JobManager">
+    The JobManager is the orchestrator of a Flink Cluster. It contains three components:
+    - **ResourceManager**: manages task slots and resource provisioning
+    - **Dispatcher**: provides the REST API for job submission and runs the Web UI
+    - **JobMaster** (one per running job): supervises the execution of a single job's tasks
+
+    In high-availability setups, multiple JobManagers can run simultaneously — one as the leader and others on standby.
+  </Accordion>
+  <Accordion title="Flink JobMaster">
+    A JobMaster is a component within the JobManager responsible for supervising the execution of the **Tasks** of a single job. There is one JobMaster per running Flink Job. The JobMaster tracks task completion, handles failures, and coordinates checkpoints for its job.
+  </Accordion>
+  <Accordion title="Flink Session Cluster">
+    A long-running Flink Cluster that accepts multiple Flink Job submissions. The cluster's lifetime is not bound to the lifetime of any single job — it continues running until manually stopped.
+
+    Because all jobs share the same cluster, resources are shared and there is some competition for cluster capacity. If a TaskManager crashes, all jobs with tasks on that TaskManager fail. Compare to **Flink Application Cluster**.
+  </Accordion>
+  <Accordion title="Flink TaskManager">
+    TaskManagers (also called *workers*) are the processes that execute the **Tasks** of a Flink dataflow. Each TaskManager runs as a JVM process with one or more **task slots**. TaskManagers communicate with each other to exchange data between consecutive tasks and report their status to the JobManager.
+  </Accordion>
+  <Accordion title="Function">
+    A Function is a user-defined piece of application logic implemented in Flink's API — for example, a `MapFunction`, `FlatMapFunction`, or `ProcessFunction`. Most Functions are wrapped by a corresponding **Operator** which handles the Flink runtime integration (state access, timer registration, output collection).
+  </Accordion>
+  <Accordion title="Instance">
+    The term *instance* refers to a specific runtime instantiation of an **Operator** or **Function** type. Because Flink runs operators in parallel, multiple instances of the same operator type run simultaneously — these are called *parallel instances*. Each parallel instance handles a subset of the data partitions.
+  </Accordion>
+  <Accordion title="JobGraph">
+    See **Logical Graph**.
+  </Accordion>
+  <Accordion title="JobResultStore">
+    The JobResultStore is a Flink component that persists the results of globally terminated jobs (finished, cancelled, or failed) to a filesystem. These persisted results allow Flink to determine whether a job should be subject to recovery in a high-availability cluster, even after the JobManager has restarted.
+  </Accordion>
+  <Accordion title="Key Group">
+    A Key Group is the atomic unit by which Flink redistributes **Keyed State** when a job is rescaled. There are exactly as many Key Groups as the configured maximum parallelism of the job. When you change the parallelism of a running job via a savepoint, each new parallel instance takes ownership of a contiguous range of Key Groups.
+  </Accordion>
+  <Accordion title="Keyed State">
+    Keyed State is **Managed State** scoped to a specific key within a **keyed stream** (a stream after a `keyBy()` operation). Each key has its own independent state. Flink partitions and co-locates keyed state with the stream partitions that carry the corresponding keys, so all state updates are local operations.
+
+    Keyed State types include: `ValueState`, `ListState`, `MapState`, `ReducingState`, and `AggregatingState`.
+  </Accordion>
+  <Accordion title="Logical Graph">
+    A Logical Graph (also called a *JobGraph* or *dataflow graph*) is a directed acyclic graph (DAG) where:
+    - **Nodes** are **Operators** (sources, transformations, sinks)
+    - **Edges** define the data flow (input/output relationships) between operators
+
+    A Logical Graph is created when you call `execute()` in a Flink Application. It is the logical description of the computation — before parallelism is applied. Compare to **Physical Graph**.
+  </Accordion>
+  <Accordion title="Managed State">
+    Managed State is application state that has been registered with the Flink framework using state descriptors (e.g., `ValueStateDescriptor`, `ListStateDescriptor`). For Managed State, Flink handles:
+    - Persistence via checkpoints and savepoints
+    - Redistribution when the job is rescaled
+    - State backend integration
+
+    Contrast with *raw state*, where you manage serialization yourself.
+  </Accordion>
+  <Accordion title="Operator">
+    An Operator is a node in a **Logical Graph**. It performs a specific computation — usually implemented by a user-defined **Function**. Special operator types include:
+    - **Sources**: ingest data from external systems (Kafka, filesystem, etc.)
+    - **Sinks**: write data to external systems
+    - **Transformations**: `map`, `flatMap`, `filter`, `keyBy`, `window`, `join`, etc.
+  </Accordion>
+  <Accordion title="Operator Chain">
+    An Operator Chain consists of two or more consecutive **Operators** that can be fused into a single **Task** for execution. Operators can be chained when there is no repartitioning (shuffle) between them.
+
+    Chaining eliminates serialization and network overhead between operators — records are passed directly in memory between chained operators. This improves throughput and reduces latency.
+  </Accordion>
+  <Accordion title="Operator State">
+    Operator State (also called *non-keyed state*) is **Managed State** scoped to a single parallel instance of an operator — not to a key. Each parallel instance has its own independent state.
+
+    Operator State is used primarily by connectors (e.g., the Kafka source stores per-partition offsets as operator state). On rescaling, operator state is redistributed either by even split or union across the new parallel instances.
+  </Accordion>
+  <Accordion title="Parallelism">
+    The parallelism of an operator is the number of parallel instances of that operator running simultaneously in the cluster. Each instance processes a subset of the data.
+
+    Parallelism can be set at different levels:
+    - **Operator level**: `myOperator.setParallelism(4)`
+    - **Execution environment level**: `env.setParallelism(4)` (default for all operators)
+    - **Cluster level**: `parallelism.default` in `flink-conf.yaml`
+  </Accordion>
+  <Accordion title="Partition">
+    A partition is an independent subset of a data stream or data set. Flink divides streams and datasets into partitions by assigning each **record** to one or more partitions. During execution, each **Task** consumes one or more partitions.
+
+    Operations that change partitioning are called *repartitioning* (e.g., `keyBy`, `rebalance`, `shuffle`, `broadcast`). A repartitioning always breaks an **Operator Chain**.
+  </Accordion>
+  <Accordion title="Physical Graph">
+    A Physical Graph (also called an *ExecutionGraph*) is the result of taking a **Logical Graph** and expanding it by the configured parallelism. Where the Logical Graph has operators as nodes, the Physical Graph has **Tasks** as nodes (one per parallel instance per operator). Edges represent data exchange between tasks, including partitioning information.
+  </Accordion>
+  <Accordion title="Record">
+    A record is the fundamental data element flowing through a Flink pipeline — a single row, event, or tuple. **Operators** and **Functions** receive records as input and emit records as output. Records carry data fields and, in event-time processing, a timestamp.
+  </Accordion>
+  <Accordion title="Runtime Execution Mode">
+    DataStream API programs can run in two execution modes:
+    - **`STREAMING`**: continuous, incremental processing of an unbounded stream. Checkpointing is used for fault tolerance.
+    - **`BATCH`**: bounded inputs processed in batch style. No checkpointing; recovery is via full input replay.
+
+    Set via `env.setRuntimeMode(RuntimeExecutionMode.BATCH)` or the `--execution-mode` CLI flag.
+  </Accordion>
+  <Accordion title="Savepoint">
+    A savepoint is a **manually triggered**, consistent snapshot of a running Flink job's state. Unlike automatic **checkpoints**, savepoints:
+    - Are triggered explicitly by the user (`./bin/flink savepoint <jobId>`)
+    - Never expire automatically
+    - Use a stable, portable format designed to survive job upgrades
+    - Always use aligned checkpointing
+
+    Savepoints are used to upgrade Flink versions, update job logic, change parallelism, or clone jobs for A/B testing — all without losing accumulated state.
+  </Accordion>
+  <Accordion title="Slot (Task Slot)">
+    A task slot is the basic unit of resource scheduling within a **TaskManager**. Each TaskManager has one or more task slots. A slot represents a fixed subset of the TaskManager's managed memory.
+
+    By default, Flink allows **slot sharing**: multiple subtasks from the same job can share a slot, so one slot can hold an entire pipeline of the job. This improves resource utilization and simplifies capacity planning.
+  </Accordion>
+  <Accordion title="State Backend">
+    A state backend determines how and where **Managed State** is stored at runtime within each TaskManager. Flink ships two built-in state backends:
+    - **`HashMapStateBackend`**: stores state in Java heap memory as a `HashMap`. Fast, but size-limited by heap.
+    - **`EmbeddedRocksDBStateBackend`**: stores state in a local RocksDB instance on disk. Slower, but supports state sizes far exceeding heap memory; supports incremental checkpoints.
+  </Accordion>
+  <Accordion title="Stream">
+    A stream is an unbounded, continuously flowing sequence of **records**. Streams are the primary abstraction in Flink's DataStream API. In Flink's unified model, batch datasets are also treated as bounded (finite) streams.
+
+    Streams between operators can be either **bounded** (finite number of records, as in batch mode) or **unbounded** (infinite, as in streaming mode).
+  </Accordion>
+  <Accordion title="Sub-Task">
+    A Sub-Task is a **Task** responsible for processing a specific **partition** of the data stream. The term emphasizes that multiple parallel Tasks exist for the same **Operator** or **Operator Chain** — one sub-task per parallel instance.
+  </Accordion>
+  <Accordion title="Table Program">
+    A generic term for pipelines declared with Flink's relational APIs: the **Table API** (programmatic, typed) or **SQL** (string-based queries). Table programs are translated into DataStream programs at runtime.
+  </Accordion>
+  <Accordion title="Task">
+    A Task is a node in a **Physical Graph** and the basic unit of work executed by Flink's runtime. Each Task encapsulates exactly one parallel instance of an **Operator** or **Operator Chain**. Tasks run in **task slots** within **TaskManagers**, each in its own thread.
+  </Accordion>
+  <Accordion title="Transformation">
+    A Transformation is a logical operation applied to one or more data streams or datasets, producing one or more output streams. Transformations are API-level concepts that are implemented by **Operators** at runtime.
+
+    Examples: `map`, `flatMap`, `filter`, `keyBy`, `window`, `reduce`, `union`, `connect`, `coGroup`, `join`.
+  </Accordion>
+  <Accordion title="Trigger">
+    A Trigger determines when a **window** is evaluated and its results emitted. The default trigger for event-time windows fires when the watermark passes the window's end time. Custom triggers can fire based on element counts, processing time, or custom conditions.
+
+    Triggers can also specify a **purge** behavior to clear the window state after firing.
+  </Accordion>
+  <Accordion title="UID (Operator UID)">
+    A UID is a unique identifier assigned to an **Operator** in a Flink job, either explicitly by the user or auto-generated from the job graph structure. UIDs are important for **savepoints**: they allow Flink to match operator state from a savepoint to the corresponding operator in the restored job.
+
+    Always assign explicit UIDs when you plan to use savepoints:
+
+    ```java
+    stream.map(new MyMapper()).uid("my-mapper-uid");
+    ```
+  </Accordion>
+  <Accordion title="UID Hash">
+    A UID Hash is the runtime identifier of an **Operator**, derived from its **UID** when the application is submitted. It is also known as the *Operator ID* or *Vertex ID*. The UID hash appears in logs, the REST API, metrics, and most importantly is how operators are matched to their state within **savepoints**.
+  </Accordion>
+  <Accordion title="Watermark">
+    A watermark is a special marker that flows through a Flink data stream as part of the event-time processing mechanism. A `Watermark(t)` declares that all events with a timestamp ≤ t have already arrived in the stream.
+
+    When a window operator receives a watermark that advances past the end of a window, it fires that window and emits results. Watermarks handle **out-of-order events** by allowing a configurable delay before declaring a time period complete.
+
+    See [Time in Flink](/concepts/time) for a full explanation.
+  </Accordion>
+  <Accordion title="Window">
+    A window is a finite, bounded view of an infinite stream, used to scope aggregations and other computations. Common window types:
+    - **Tumbling**: fixed-size, non-overlapping
+    - **Sliding**: fixed-size, overlapping (defined by size + slide)
+    - **Session**: dynamic size, defined by inactivity gaps
+    - **Count**: data-driven, triggers after a fixed number of elements
+
+    Windows can be driven by **event time** (based on event timestamps and watermarks) or **processing time** (based on the system clock).
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,85 @@
+---
+title: "Formats Overview"
+description: "Overview of the table formats available in Flink for serializing and deserializing data with table connectors."
+---
+
+A **format** defines how binary data is mapped to table columns—it is the serialization and deserialization layer that sits between a connector and the data it reads or writes. Most connectors require you to specify a format in the `WITH` clause.
+
+```sql
+CREATE TABLE my_table (
+  id INT,
+  name STRING
+) WITH (
+  'connector' = 'kafka',
+  'topic'     = 'my_topic',
+  'properties.bootstrap.servers' = 'localhost:9092',
+  'format'    = 'json'  -- <-- the format
+)
+```
+
+## How formats work
+
+Formats implement either a `DeserializationSchema` (for reading), a `SerializationSchema` (for writing), or both. Flink discovers format factories via the same SPI mechanism as connectors: the `format` key in the `WITH` clause maps to a registered format factory.
+
+Formats that support both reading and writing are labeled:
+- **Serialization Schema** – can be used for sinks
+- **Deserialization Schema** – can be used for sources
+
+## Available formats
+
+| Format | Read | Write | Supported connectors |
+|--------|------|-------|---------------------|
+| [JSON](/connectors/formats/json) | Yes | Yes | Kafka, Upsert Kafka, Kinesis, Firehose, Filesystem, Elasticsearch |
+| [Avro](/connectors/formats/avro) | Yes | Yes | Kafka, Upsert Kafka, Kinesis, Firehose, Filesystem |
+| [Parquet](/connectors/formats/parquet) | Yes | Yes | Filesystem |
+| [ORC](/connectors/formats/orc) | Yes | Yes | Filesystem |
+| CSV | Yes | Yes | Kafka, Upsert Kafka, Kinesis, Firehose, Filesystem |
+| Confluent Avro | Yes | Yes | Kafka, Upsert Kafka |
+| Protobuf | Yes | Yes | Kafka |
+| Debezium CDC | Yes | Yes | Kafka, Filesystem |
+| Canal CDC | Yes | Yes | Kafka, Filesystem |
+| Maxwell CDC | Yes | Yes | Kafka, Filesystem |
+| OGG CDC | Yes | Yes | Kafka, Filesystem |
+| Raw | Yes | Yes | Kafka, Upsert Kafka, Kinesis, Firehose, Filesystem |
+
+<CardGroup cols={2}>
+  <Card title="JSON" icon="braces" href="/connectors/formats/json">
+    Human-readable format. Derive schema from table DDL. Configurable error handling and timestamp formats.
+  </Card>
+  <Card title="Avro" icon="file" href="/connectors/formats/avro">
+    Compact binary format with schema evolution support. Schema is derived from the table schema.
+  </Card>
+  <Card title="Parquet" icon="table" href="/connectors/formats/parquet">
+    Columnar binary format. High compression and read performance. Compatible with Hive and Spark.
+  </Card>
+  <Card title="ORC" icon="table-columns" href="/connectors/formats/orc">
+    Columnar binary format. High compression and read performance. Compatible with Hive.
+  </Card>
+</CardGroup>
+
+## Formats and the DataStream API
+
+Formats also integrate with the DataStream API through `FileSource` and `FileSink`:
+
+- **`StreamFormat`**: reads records from an input stream one at a time (e.g., `TextLineInputFormat`, `CsvReaderFormat`)
+- **`BulkFormat`**: reads batches of records at a time (e.g., Parquet and ORC readers)
+- **`BulkWriter.Factory`**: writes batches of records (e.g., `AvroWriterFactory`, `ParquetWriterFactory`, `OrcBulkWriterFactory`)
+
+See the [Filesystem Connector (DataStream)](/connectors/datastream/filesystem) page for details on using these in a DataStream job.
+
+## CDC formats
+
+Flink supports several Change Data Capture (CDC) formats that represent database change events as Flink rows with a changelog mode:
+
+| Format | Source system | Changelog mode |
+|--------|--------------|----------------|
+| Debezium-JSON | MySQL, PostgreSQL, MongoDB, SQL Server, and others | Insert, Update, Delete |
+| Canal-JSON | MySQL (via Alibaba Canal) | Insert, Update, Delete |
+| Maxwell-JSON | MySQL (via Maxwell) | Insert, Update, Delete |
+| OGG-JSON | Oracle GoldenGate | Insert, Update, Delete |
+
+CDC formats enable Flink to maintain stateful aggregations over mutable database tables, making them useful for building real-time analytical views.
+
+## Resolving format dependency conflicts
+
+If you package multiple formats in an uber-JAR, their `META-INF/services` files may conflict. See the [Table / SQL Connectors Overview](/connectors/table/overview) for instructions on using Maven Shade's `ServicesResourceTransformer` to merge them correctly.

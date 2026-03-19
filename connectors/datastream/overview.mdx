@@ -1,0 +1,130 @@
+---
+title: "DataStream Connectors Overview"
+description: "Overview of source and sink connectors available in Flink's DataStream API, including delivery guarantees and built-in connector list."
+---
+
+Flink's DataStream API connects to external systems through **sources** and **sinks**. A source reads data into a Flink job; a sink writes data out. Connectors wire these together with external storage, messaging, and file systems.
+
+## Source and sink model
+
+Every connector implements either the `Source` interface, the `Sink` interface, or both. You add them to a job with `env.fromSource(...)` and `stream.sinkTo(...)` respectively.
+
+```java
+// Source
+DataStreamSource<String> stream = env.fromSource(
+    source,
+    WatermarkStrategy.noWatermarks(),
+    "My Source"
+);
+
+// Sink
+stream.sinkTo(sink);
+```
+
+## Delivery guarantees
+
+Flink connectors provide one of three processing guarantees:
+
+| Guarantee | Description |
+|-----------|-------------|
+| **At-most-once** | Records may be lost on failure. No re-delivery. |
+| **At-least-once** | Records are never lost but may be delivered more than once. The source re-reads from the last checkpoint position. |
+| **Exactly-once** | Every record is processed exactly once end-to-end. Requires the source to participate in checkpointing and the sink to use transactions or idempotent writes. |
+
+Exactly-once semantics require checkpointing to be enabled:
+
+```java
+StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+env.enableCheckpointing(60_000); // checkpoint every 60 seconds
+```
+
+### Source guarantees
+
+| Source | Guarantee | Notes |
+|--------|-----------|-------|
+| Apache Kafka | Exactly-once | Offsets committed on checkpoint |
+| AWS Kinesis Streams | Exactly-once | |
+| RabbitMQ | At-most-once (v0.10) / Exactly-once (v1.0) | |
+| Google PubSub | At-least-once | |
+| Files (FileSource) | Exactly-once | |
+| Collections | Exactly-once | |
+| Sockets | At-most-once | |
+
+### Sink guarantees
+
+| Sink | Guarantee | Notes |
+|------|-----------|-------|
+| Apache Kafka | At-least-once / Exactly-once | Exactly-once with transactional producers (v0.11+) |
+| Elasticsearch / Opensearch | At-least-once | |
+| Cassandra | At-least-once / Exactly-once | Exactly-once for idempotent updates only |
+| Amazon DynamoDB | At-least-once | |
+| Amazon Kinesis Data Streams | At-least-once | |
+| Amazon Kinesis Data Firehose | At-least-once | |
+| File sinks (FileSink) | Exactly-once | Requires checkpointing in streaming mode |
+| Socket sinks | At-least-once | |
+
+## Built-in connectors
+
+The following connectors are included in the `flink-connectors` module and ship with Flink source releases. They are **not** included in the binary distribution JARs—you must add the relevant dependency to your project.
+
+<CardGroup cols={2}>
+  <Card title="Filesystem" icon="folder" href="/connectors/datastream/filesystem">
+    Read and write files on POSIX, HDFS, S3, OSS, and other supported filesystems. Supports CSV, Avro, Parquet, ORC, and custom formats.
+  </Card>
+  <Card title="DataGen" icon="bolt" href="/connectors/datastream/datagen">
+    Generate synthetic data streams for testing and development without an external system.
+  </Card>
+  <Card title="Hybrid Source" icon="shuffle" href="/connectors/datastream/hybrid-source">
+    Chain multiple sources in sequence. Read bounded historical data then switch automatically to an unbounded real-time source.
+  </Card>
+</CardGroup>
+
+## External connectors
+
+The following connectors are maintained in separate repositories outside the main Flink repository. Add the appropriate Maven dependency for each.
+
+| Connector | Direction | Repository |
+|-----------|-----------|------------|
+| Apache Kafka | Source / Sink | [apache/flink-connector-kafka](https://github.com/apache/flink-connector-kafka) |
+| Apache Cassandra | Source / Sink | [apache/flink-connector-cassandra](https://github.com/apache/flink-connector-cassandra) |
+| Amazon DynamoDB | Sink | [apache/flink-connector-aws](https://github.com/apache/flink-connector-aws) |
+| Amazon Kinesis Data Streams | Source / Sink | [apache/flink-connector-aws](https://github.com/apache/flink-connector-aws) |
+| Amazon Kinesis Data Firehose | Sink | [apache/flink-connector-aws](https://github.com/apache/flink-connector-aws) |
+| Elasticsearch | Sink | [apache/flink-connector-elasticsearch](https://github.com/apache/flink-connector-elasticsearch) |
+| Opensearch | Sink | [apache/flink-connector-opensearch](https://github.com/apache/flink-connector-opensearch) |
+| RabbitMQ | Source / Sink | [apache/flink-connector-rabbitmq](https://github.com/apache/flink-connector-rabbitmq) |
+| Google PubSub | Source / Sink | [apache/flink-connector-gcp-pubsub](https://github.com/apache/flink-connector-gcp-pubsub) |
+| Apache Pulsar | Source | [apache/flink-connector-pulsar](https://github.com/apache/flink-connector-pulsar) |
+| JDBC | Sink | [apache/flink-connector-jdbc](https://github.com/apache/flink-connector-jdbc) |
+| MongoDB | Source / Sink | [apache/flink-connector-mongodb](https://github.com/apache/flink-connector-mongodb) |
+| Prometheus | Sink | [apache/flink-connector-prometheus](https://github.com/apache/flink-connector-prometheus) |
+
+## Connectors in Apache Bahir
+
+[Apache Bahir](https://bahir.apache.org/) hosts additional streaming connectors that are released independently:
+
+- **Apache ActiveMQ** (source/sink)
+- **Apache Flume** (sink)
+- **Redis** (sink)
+- **Akka** (sink)
+- **Netty** (source)
+
+## Other ways to connect to Flink
+
+### Async I/O for data enrichment
+
+Instead of using a connector, you can query an external database or web service inside a `Map` or `FlatMap` operator. Flink's [Asynchronous I/O](https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/datastream/operators/asyncio/) API lets you do this efficiently by overlapping multiple outstanding requests:
+
+```java
+DataStream<String> enriched = AsyncDataStream.unorderedWait(
+    input,
+    new AsyncDatabaseRequest(),
+    1000,
+    TimeUnit.MILLISECONDS,
+    100 // max concurrent requests
+);
+```
+
+<Note>
+Because `flink-connector-base` is bundled in `flink-dist`, externalized connectors no longer bundle it as a transitive dependency. If you run examples locally outside of a Flink cluster, make sure `flink-connector-base` is present on your classpath.
+</Note>

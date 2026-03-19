@@ -1,0 +1,265 @@
+---
+title: "PyFlink Overview"
+description: "Introduction to PyFlink, the Python API for Apache Flink's DataStream and Table APIs. Learn how to install PyFlink and write your first streaming program."
+---
+
+PyFlink is the Python API for Apache Flink, giving you access to Flink's powerful DataStream and Table APIs from Python. You can build scalable batch and streaming workloads—real-time data pipelines, large-scale exploratory analysis, machine learning pipelines, and ETL processes—without leaving Python.
+
+Under the hood, PyFlink uses [Py4J](https://www.py4j.org/) to bridge Python and the Flink JVM runtime, so your Python code drives a full Flink cluster with all of its fault tolerance, state management, and connector ecosystem.
+
+## Choosing an API
+
+<CardGroup cols={2}>
+  <Card title="Table API" icon="table">
+    A relational, SQL-like API for working with structured data. Ideal if you're familiar with pandas or SQL and want to express transformations declaratively.
+  </Card>
+  <Card title="DataStream API" icon="arrow-right-arrow-left">
+    A lower-level API giving you direct control over streams, state, and time. Use this for complex event processing, custom windowing, or anything that requires fine-grained control.
+  </Card>
+</CardGroup>
+
+You can mix both APIs in a single program by converting between `Table` and `DataStream` objects.
+
+## Prerequisites
+
+- **Java 11 or 17** (required to run the Flink JVM runtime)
+- **Python 3.8, 3.9, 3.10, 3.11, or 3.12**
+- `pip` 20.3 or later
+
+<Warning>
+  PyFlink requires a compatible Java installation. Set `JAVA_HOME` if Java is not on your `PATH`. Java 8 is no longer supported.
+</Warning>
+
+## Installation
+
+<Steps>
+  <Step title="Install PyFlink">
+    ```bash
+    pip install apache-flink
+    ```
+
+    This installs the `pyflink` package along with its dependencies: Py4J, CloudPickle, python-dateutil, and Apache Beam (used for the portable runner).
+  </Step>
+
+  <Step title="Verify the installation">
+    ```bash
+    python -c "import pyflink; print(pyflink.__version__)"
+    ```
+
+    You should see the installed version printed to stdout.
+  </Step>
+
+  <Step title="(Optional) Install PyArrow for Arrow-based UDFs">
+    To use pandas UDFs and Arrow-optimized data transfer, install PyArrow:
+
+    ```bash
+    pip install pyarrow
+    ```
+  </Step>
+</Steps>
+
+## Your first PyFlink program
+
+The examples below show a word count job written with both APIs so you can compare the styles.
+
+<Tabs>
+  <Tab title="Table API">
+    ```python
+    from pyflink.table import EnvironmentSettings, TableEnvironment, DataTypes
+    from pyflink.table.expressions import col, lit
+    from pyflink.table.udf import udf
+
+    # Create a streaming TableEnvironment
+    t_env = TableEnvironment.create(EnvironmentSettings.in_streaming_mode())
+
+    # Source: generate random word IDs at 5 rows/second
+    words = ["flink", "python", "streaming", "state", "checkpoint"]
+
+    t_env.create_temporary_table(
+        "source",
+        t_env.from_elements([(w,) for w in words * 10], schema=["word"])
+        .__class__  # placeholder — use TableDescriptor in production
+    )
+
+    # Inline UDF to upper-case a word
+    @udf(result_type=DataTypes.STRING())
+    def upper(s):
+        return s.upper()
+
+    # Count occurrences per word
+    table = t_env.from_elements([(w,) for w in words * 10], schema=["word"])
+    result = (
+        table
+        .select(upper(col("word")).alias("word"))
+        .group_by(col("word"))
+        .select(col("word"), lit(1).count.alias("cnt"))
+    )
+    result.execute().print()
+    ```
+  </Tab>
+  <Tab title="DataStream API">
+    ```python
+    from pyflink.common import Types
+    from pyflink.datastream import StreamExecutionEnvironment
+
+    env = StreamExecutionEnvironment.get_execution_environment()
+
+    words = ["flink", "python", "streaming", "state", "checkpoint"]
+
+    ds = env.from_collection(
+        [(w, 1) for w in words * 10],
+        type_info=Types.TUPLE([Types.STRING(), Types.INT()]),
+    )
+
+    # Key by word, then sum the counts
+    result = (
+        ds
+        .key_by(lambda x: x[0])
+        .reduce(lambda a, b: (a[0], a[1] + b[1]))
+    )
+
+    result.print()
+    env.execute("Word Count")
+    ```
+  </Tab>
+  <Tab title="Mixed (Table + DataStream)">
+    ```python
+    from pyflink.common import Types
+    from pyflink.datastream import StreamExecutionEnvironment
+    from pyflink.table import StreamTableEnvironment, DataTypes, Schema
+    from pyflink.table.udf import udf
+    from pyflink.table.expressions import col
+
+    # Use StreamTableEnvironment when mixing both APIs
+    env = StreamExecutionEnvironment.get_execution_environment()
+    t_env = StreamTableEnvironment.create(env)
+
+    @udf(result_type=DataTypes.BIGINT())
+    def str_len(s):
+        return len(s)
+
+    # Start in Table API
+    table = t_env.from_elements(
+        [(1, "hello"), (2, "world"), (3, "flink")],
+        schema=["id", "word"],
+    )
+    table = table.select(col("id"), str_len(col("word")).alias("length"))
+
+    # Convert to DataStream for lower-level operations
+    ds = t_env.to_data_stream(table)
+    ds = ds.map(lambda r: r[0] + r[1], output_type=Types.LONG())
+
+    # Convert back to Table
+    result_table = t_env.from_data_stream(
+        ds,
+        Schema.new_builder().column("f0", DataTypes.BIGINT()).build(),
+    )
+    result_table.execute().print()
+    ```
+  </Tab>
+</Tabs>
+
+## Key concepts
+
+### StreamExecutionEnvironment
+
+`StreamExecutionEnvironment` is the entry point for every DataStream program. It controls parallelism, checkpointing, and job submission.
+
+```python
+from pyflink.datastream import StreamExecutionEnvironment
+
+env = StreamExecutionEnvironment.get_execution_environment()
+env.set_parallelism(4)
+env.enable_checkpointing(10_000)  # checkpoint every 10 seconds
+```
+
+### TableEnvironment and StreamTableEnvironment
+
+`TableEnvironment` is the entry point for pure Table API programs. Use `StreamTableEnvironment` when you need to convert between tables and data streams.
+
+```python
+from pyflink.table import TableEnvironment, EnvironmentSettings
+
+# Pure Table API (batch or streaming)
+t_env = TableEnvironment.create(EnvironmentSettings.in_streaming_mode())
+
+# Or, to also access DataStream APIs
+from pyflink.datastream import StreamExecutionEnvironment
+from pyflink.table import StreamTableEnvironment
+
+env = StreamExecutionEnvironment.get_execution_environment()
+t_env = StreamTableEnvironment.create(env)
+```
+
+### Python UDFs
+
+Both APIs let you register Python functions as UDFs. The Table API supports scalar, table, aggregate, and table-aggregate UDFs:
+
+```python
+from pyflink.table import DataTypes
+from pyflink.table.udf import udf, ScalarFunction
+
+# Decorator style
+@udf(result_type=DataTypes.STRING())
+def greet(name):
+    return f"Hello, {name}!"
+
+# Class style (gives access to open/close lifecycle)
+class Greet(ScalarFunction):
+    def eval(self, name):
+        return f"Hello, {name}!"
+
+greet_udf = udf(Greet(), result_type=DataTypes.STRING())
+```
+
+## Running a PyFlink job
+
+<Tabs>
+  <Tab title="Local (mini-cluster)">
+    Run your script directly with Python. Flink starts an embedded mini-cluster automatically:
+
+    ```bash
+    python my_job.py
+    ```
+  </Tab>
+  <Tab title="Standalone cluster">
+    Package your script and submit it with the Flink CLI:
+
+    ```bash
+    flink run \
+      --python my_job.py \
+      --pyFiles my_lib.py \
+      -p 4
+    ```
+  </Tab>
+  <Tab title="YARN / Kubernetes">
+    Submit in application mode, which uploads the Python file to the cluster:
+
+    ```bash
+    flink run-application \
+      --target yarn-application \
+      --python my_job.py
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  When running on a remote cluster, call `execute_insert(...).wait()` or `env.execute()` to block until the job finishes. On a remote cluster the call returns immediately after submission—omit `.wait()` and the local process exits before results are produced.
+</Note>
+
+## Further reading
+
+<CardGroup cols={2}>
+  <Card title="Execution mode" href="/apis/python/execution-mode">
+    Understand in-process vs external process execution and Arrow-based UDFs.
+  </Card>
+  <Card title="Dependency management" href="/apis/python/dependency-management">
+    Add Python packages, virtual environments, and JAR connectors to your job.
+  </Card>
+  <Card title="Connectors" href="/apis/python/connectors">
+    Connect to Kafka, filesystems, and other systems from the Python Table API.
+  </Card>
+  <Card title="Metrics" href="/apis/python/metrics">
+    Register custom counters, gauges, meters, and distributions from UDFs.
+  </Card>
+</CardGroup>
